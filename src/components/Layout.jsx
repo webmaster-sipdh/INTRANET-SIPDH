@@ -45,7 +45,7 @@ export default function Layout({ children, currentView, setView, userRole }) {
           {/* SECCIÓN IZQUIERDA: Alineación de activos de marca */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             
-            {/* 🚀 ISOTIPO: Reducción controlada de 512px a 36px manteniendo proporción */}
+            {/* 🚀 ISOTIPO: Reducción controlada de 512px a 36px manteniendo proporción 
             <img 
               src="/Isotipo-w.png" 
               alt="Isotipo SIPDH" 
@@ -55,11 +55,11 @@ export default function Layout({ children, currentView, setView, userRole }) {
                 objectFit: 'contain',
                 display: 'block'
               }} 
-            />
+            /> */}
             
             {/* 🚀 LOGO TEXTUAL: Reducción de 92px de alto a 26px para que calce en el Toolbar */}
             <img 
-              src="/logo.png" 
+              src="/SIPDH-blanco.png" 
               alt="ISIPDH - Intranet" 
               style={{ 
                 height: '26px', 
