@@ -592,6 +592,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
     const guardarDocumentoEnFirestore = async (pdfNombre = '', pdfUrl = '', storagePath = '') => {
       try {
         const modeloDocumentoMail = {
+          from: 'comunicados@sipdh.com', 
           to: listaCorreos,
           template: {
             name: 'comunicado_institucional',
@@ -600,21 +601,14 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
               cuerpo: cuerpoComunicado.trim()
             }
           },
-          // 1. INICIALIZAMOS 'message' SIEMPRE para evitar el undefined en la extensión
-          message: {
-            from: 'comunicados@sipdh.com',
-            // 2. Los HEADERS deben ir DENTRO de message para que SendGrid los lea
-            headers: {
-              "X-SMTPAPI": JSON.stringify({
-                unique_args: {
-                  casoId: caso.id,
-                  comunicadoId: comunicadoId
-                }
-              })
-            },
-            attachments: [] // Inicializamos vacío para que la extensión no falle
+          headers: {
+            "X-SMTPAPI": JSON.stringify({
+              unique_args: {
+                casoId: caso.id,
+                comunicadoId: comunicadoId
+              }
+            })
           },
-          // Metadatos de tu interfaz
           asunto: asuntoComunicado.trim(),
           cuerpo: cuerpoComunicado.trim(),
           fecha_envio: new Date().toISOString(),
@@ -627,11 +621,9 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
           modeloDocumentoMail.pdf_nombre = pdfNombre;
           modeloDocumentoMail.pdf_url = pdfUrl;
           modeloDocumentoMail.storage_path = storagePath;
-          // 3. Hacemos PUSH al array en lugar de sobreescribir el objeto message
-          modeloDocumentoMail.message.attachments.push({ 
-            filename: pdfNombre, 
-            path: pdfUrl 
-          });
+          modeloDocumentoMail.message = {
+            attachments: [{ filename: pdfNombre, path: pdfUrl }]
+          };
         }
 
         await setDoc(nuevoComunicadoDoc, modeloDocumentoMail);
