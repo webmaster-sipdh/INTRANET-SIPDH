@@ -32,10 +32,23 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
         continue;
       }
 
-      // 🛡️ FILTRO 1: Ignorar aperturas automáticas de Apple Mail Privacy Protection
-      if (tipoEvento === 'open' && evento.apple_privacy_open === true) {
-        console.log(`🤖 Bot de Apple MPP detectado para ${email}. Ignorando falso positivo de apertura.`);
-        continue;
+      // 🛡️ FILTRO 2: Ignorar escáneres de seguridad y proxies de imágenes (Ej. Gmail)
+      if (tipoEvento === 'open' && evento.useragent) {
+        const ua = evento.useragent.toLowerCase();
+        if (
+          ua.includes('bot') || 
+          ua.includes('spider') || 
+          ua.includes('crawl') || 
+          ua.includes('scanner') || 
+          ua.includes('cloudflarestub') ||
+          ua.includes('googleimageproxy') || // Bloquea el pre-cargador automático de Gmail
+          ua.includes('yahoo') ||            // Bloquea el pre-cargador de Yahoo
+          ua.includes('barracuda') ||        // Escáner de correos corporativos
+          ua.includes('mimecast') ||         // Escáner de correos corporativos
+          ua.includes('proofpoint')          // Escáner de correos corporativos
+        ) {
+          continue; // Si es un robot, ignoramos la apertura y pasamos al siguiente
+        }
       }
 
       // 🛡️ FILTRO 2: Ignorar escáneres de seguridad corporativos comunes por User-Agent
