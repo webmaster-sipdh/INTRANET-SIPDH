@@ -48,7 +48,7 @@ export default function Layout({ children, currentView, setView, userRole }) {
             {/* 🚀 ISOTIPO: Reducción controlada de 512px a 36px manteniendo proporción */}
             <img 
               src="/Isotipo-w.png" 
-              alt="Isotipo IIRESODH" 
+              alt="Isotipo SIPDH" 
               style={{ 
                 height: '36px', 
                 width: 'auto', // Evita que el ancho se desfase de los 513px nativos
@@ -60,7 +60,7 @@ export default function Layout({ children, currentView, setView, userRole }) {
             {/* 🚀 LOGO TEXTUAL: Reducción de 92px de alto a 26px para que calce en el Toolbar */}
             <img 
               src="/logo.png" 
-              alt="IIRESODH - Intranet" 
+              alt="ISIPDH - Intranet" 
               style={{ 
                 height: '26px', 
                 width: 'auto', // Calcula el ancho proporcional a ~85px de forma automática

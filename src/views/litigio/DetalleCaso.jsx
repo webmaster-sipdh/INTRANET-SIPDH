@@ -592,7 +592,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
     const guardarDocumentoEnFirestore = async (pdfNombre = '', pdfUrl = '', storagePath = '') => {
       try {
         const modeloDocumentoMail = {
-          from: 'comunicados@iiresodh.org', 
+          from: 'comunicados@sipdh.com', 
           to: listaCorreos,
           template: {
             name: 'comunicado_institucional',

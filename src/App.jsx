@@ -86,7 +86,7 @@ function App() {
       // 🚀 EXCLUSIÓN ABSOLUTA: Si no pertenece al dominio institucional, fuera inmediatamente
       if (!emailLimpio.endsWith('@iiresodh.org')) {
         await logout();
-        setInstitutionalError('Acceso denegado: Solo se permiten cuentas institucionales de IIRESODH.');
+        setInstitutionalError('Acceso denegado: Solo se permiten cuentas institucionales de SIPDH.');
         setLoadingRole(false);
         return;
       }

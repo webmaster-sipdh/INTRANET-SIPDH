@@ -13,7 +13,7 @@ export default function HubIntranet({ setView, userRole }) {
     <Box sx={{ maxWidth: 1200, mx: 'auto', p: 2, mt: 2 }}>
       <Box sx={{ mb: 5, textAlign: 'center' }}>
         <Typography variant="h4" fontWeight="bold" color="primary.main" gutterBottom>
-          Intranet Global IIRESODH
+          Intranet Global SIPDH
         </Typography>
         <Typography variant="body1" color="text.secondary">
           Seleccione el módulo operativo al que desea acceder

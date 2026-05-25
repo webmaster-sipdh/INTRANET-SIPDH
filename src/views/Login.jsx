@@ -42,7 +42,7 @@ export default function Login({ institutionalError, setInstitutionalError }) {
         <Box sx={{ mb: 4, display: 'flex', justifyContent: 'center' }}>
           <img 
             src="/Logo-simple.png" 
-            alt="Logo IIRESODH" 
+            alt="Logo SIPDH" 
             style={{ 
               // Usamos ancho máximo para responsividad y alto automático para mantener aspect ratio
               maxWidth: '300px', 
@@ -62,7 +62,7 @@ export default function Login({ institutionalError, setInstitutionalError }) {
           color="#1a365d"
           sx={{ letterSpacing: 0.5, mb: 1 }}
         >
-          Intranet Global IIRESODH
+          Intranet Global SIPDH
         </Typography>
 
         <Typography 
@@ -70,7 +70,7 @@ export default function Login({ institutionalError, setInstitutionalError }) {
           color="text.secondary" 
           sx={{ mb: 4, px: 2, lineHeight: 1.6 }}
         >
-          Acceso exclusivo para personal legal, administrativo y operativo autorizado de IIRESODH.
+          Acceso exclusivo para personal legal, administrativo y operativo autorizado de SIPDH.
         </Typography>
 
         {/* Mensaje de error perimetral */}
@@ -113,7 +113,7 @@ export default function Login({ institutionalError, setInstitutionalError }) {
           color="text.disabled" 
           sx={{ display: 'block', mt: 4, fontSize: '0.75rem' }}
         >
-          IIRESODH - Intranet
+          SIPDH - Intranet
         </Typography>
       </Paper>
     </Box>
