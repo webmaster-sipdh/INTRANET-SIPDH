@@ -32,25 +32,13 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
         continue;
       }
 
-      // 🛡️ FILTRO 2: Ignorar escáneres corporativos de seguridad agresivos por User-Agent
-      if (tipoEvento === 'open' && evento.useragent) {
-        const ua = evento.useragent.toLowerCase();
-        if (
-          ua.includes('bot') || 
-          ua.includes('spider') || 
-          ua.includes('crawl') || 
-          ua.includes('scanner') || 
-          ua.includes('cloudflarestub') ||
-          ua.includes('barracuda') ||  // Filtra Firewalls de seguridad corporativa
-          ua.includes('mimecast') ||   // Filtra Firewalls de seguridad corporativa
-          ua.includes('proofpoint')    // Filtra Firewalls de seguridad corporativa
-        ) {
-          console.log(`🤖 Escáner de seguridad detectado por User-Agent: ${evento.useragent}. Ignorando apertura falsa.`);
-          continue; 
-        }
+      // 🛡️ FILTRO 1: Ignorar aperturas automáticas (Apple MPP y Máquinas de SendGrid)
+      if (tipoEvento === 'open' && (evento.apple_privacy_open === true || evento.sg_machine_open === true)) {
+        console.log(`🤖 Apertura de máquina detectada para ${email}. Ignorando falso positivo.`);
+        continue;
       }
 
-      // 🛡️ FILTRO 2: Ignorar escáneres de seguridad corporativos comunes por User-Agent
+      // 🛡️ FILTRO 2: Tu lógica original exacta para ignorar bots clásicos
       if (tipoEvento === 'open' && evento.useragent) {
         const ua = evento.useragent.toLowerCase();
         if (ua.includes('bot') || ua.includes('spider') || ua.includes('crawl') || ua.includes('scanner') || ua.includes('cloudflarestub')) {
