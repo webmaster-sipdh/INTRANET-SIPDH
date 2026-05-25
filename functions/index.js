@@ -32,7 +32,7 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
         continue;
       }
 
-      // 🛡️ FILTRO 2: Ignorar escáneres de seguridad y proxies de imágenes (Ej. Gmail)
+      // 🛡️ FILTRO 2: Ignorar escáneres corporativos de seguridad agresivos por User-Agent
       if (tipoEvento === 'open' && evento.useragent) {
         const ua = evento.useragent.toLowerCase();
         if (
@@ -41,13 +41,12 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
           ua.includes('crawl') || 
           ua.includes('scanner') || 
           ua.includes('cloudflarestub') ||
-          ua.includes('googleimageproxy') || // Bloquea el pre-cargador automático de Gmail
-          ua.includes('yahoo') ||            // Bloquea el pre-cargador de Yahoo
-          ua.includes('barracuda') ||        // Escáner de correos corporativos
-          ua.includes('mimecast') ||         // Escáner de correos corporativos
-          ua.includes('proofpoint')          // Escáner de correos corporativos
+          ua.includes('barracuda') ||  // Filtra Firewalls de seguridad corporativa
+          ua.includes('mimecast') ||   // Filtra Firewalls de seguridad corporativa
+          ua.includes('proofpoint')    // Filtra Firewalls de seguridad corporativa
         ) {
-          continue; // Si es un robot, ignoramos la apertura y pasamos al siguiente
+          console.log(`🤖 Escáner de seguridad detectado por User-Agent: ${evento.useragent}. Ignorando apertura falsa.`);
+          continue; 
         }
       }
 
