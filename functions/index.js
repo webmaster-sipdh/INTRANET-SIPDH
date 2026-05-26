@@ -37,6 +37,18 @@ function obtenerFechaActualCR() {
   return formateador.format(new Date());
 }
 
+/**
+ * UTILERÍA AUXILIAR: Calcula una fecha futura en días (YYYY-MM-DD) para el escaneo anticipado en CR.
+ * Costa Rica no aplica cambios de horario estacional (DST), por lo que sumar horas puras es 100% seguro.
+ */
+function obtenerFechaFuturaCR(diasAdelanto) {
+  const hoy = new Date();
+  const fechaFutura = new Date(hoy.getTime() + diasAdelanto * 24 * 60 * 60 * 1000);
+  const opciones = { timeZone: 'America/Costa_Rica', year: 'numeric', month: '2-digit', day: '2-digit' };
+  const formateador = new Intl.DateTimeFormat('en-CA', opciones);
+  return formateador.format(fechaFutura);
+}
+
 // =====================================================================================
 // TU WEBHOOK ORIGINAL DE SENDGRID (100% INTACTO Y SIN ALTERACIONES)
 // =====================================================================================
@@ -164,40 +176,45 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
 });
 
 // =====================================================================================
-// MOTOR CRON: Tarea programada nocturna v2 con consulta cambiaria automatizada BCCR
+// MOTOR CRON: Tarea programada nocturna v2 con escaneo anticipado de 3 días
 // =====================================================================================
 exports.nightlyBillingCron = onSchedule({
   schedule: '0 0 * * *', 
   timeZone: 'America/Costa_Rica'
 }, async (event) => {
   const hoyCR = obtenerFechaActualCR();
-  console.log(`[CRON] Iniciando barrido masivo de obligaciones para la fecha fiscal: ${hoyCR}`);
+  // Calculamos el objetivo de escaneo: buscar lo que vence exactamente en 3 días
+  const diasAnticipacion = 3;
+  const targetFechaVencimientoCR = obtenerFechaFuturaCR(diasAnticipacion);
 
-  // REQUERIMIENTO COMPUESTO v4.4: Consulta automatizada de tasa oficial al BCCR para la ventana fiscal diaria
+  console.log(`[CRON] Iniciando barrido nocturno el día ${hoyCR}. Buscando obligaciones que vencen el: ${targetFechaVencimientoCR} (Anticipación de ${diasAnticipacion} días)`);
+
+  // REQUERIMIENTO COMPUESTO v4.4: Consulta de tasa oficial al BCCR para el día del disparo
   let tipoCambioVentaBCCR = 1;
   try {
     const apiRes = await fetch('https://tipodecambio.paginasweb.cr/api');
     const apiData = await apiRes.json();
     if (apiData && apiData.venta) {
       tipoCambioVentaBCCR = parseFloat(apiData.venta);
-      console.log(`[CRON API] Tipo de cambio oficial de venta obtenido correctamente del BCCR: ¢${tipoCambioVentaBCCR}`);
+      console.log(`[CRON API] Tipo de cambio oficial de venta obtenido del BCCR: ¢${tipoCambioVentaBCCR}`);
     }
   } catch (errCambiario) {
-    console.error(`[CRON WARNING] Falla al consumir el API cambiario de Costa Rica. Se usará valor neutro (1):`, errCambiario);
+    console.error(`[CRON WARNING] Falla al consumir el API cambiario de Costa Rica. Usando valor neutro (1):`, errCambiario);
   }
 
   try {
+    // MODIFICACIÓN CLAVE: Buscamos cuotas pendientes cuyo vencimiento sea en 3 días exactos
     const snapshotCuotas = await db.collectionGroup('plan_pagos')
       .where('estado', '==', 'pendiente')
-      .where('fecha_vencimiento', '==', hoyCR)
+      .where('fecha_vencimiento', '==', targetFechaVencimientoCR)
       .get();
 
     if (snapshotCuotas.empty) {
-      console.log(`[CRON] No se detectaron cuotas calendarizadas para cobro el día de hoy.`);
+      console.log(`[CRON] No se detectaron cuotas que venzan en los próximos 3 días (${targetFechaVencimientoCR}).`);
       return null;
     }
 
-    console.log(`[CRON] Se localizaron ${snapshotCuotas.size} transacciones pendientes para procesar.`);
+    console.log(`[CRON] Se localizaron ${snapshotCuotas.size} transacciones que requieren envío anticipado.`);
 
     for (const docCuota of snapshotCuotas.docs) {
       const cuotaData = docCuota.data();
@@ -251,17 +268,17 @@ exports.nightlyBillingCron = onSchedule({
           metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
         });
 
+        // MODIFICACIÓN CLAVE: Cambiamos days_until_due a 3 para que venza justo el día programado en la intranet
         const invoice = await stripe.invoices.create({
           customer: stripeCustomerId,
           auto_advance: true,
           collection_method: 'send_invoice',
-          days_until_due: 7, 
+          days_until_due: diasAnticipacion, 
           metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
         });
 
         const finalizedInvoice = await stripe.invoices.sendInvoice(invoice.id);
 
-        // Actualización persistiendo la traza del tipo de cambio oficial de la v4.4
         await cuotaRef.update({
           stripe_invoice_id: finalizedInvoice.id,
           stripe_invoice_url: finalizedInvoice.hosted_invoice_url,
@@ -270,7 +287,7 @@ exports.nightlyBillingCron = onSchedule({
           tipo_cambio_banco: tipoCambioVentaBCCR
         });
 
-        console.log(`[CRON SUCCESS] Cobro electrónico enviado con éxito a: ${emailCliente} | Invoice ID: ${finalizedInvoice.id}`);
+        console.log(`[CRON SUCCESS] Cobro electrónico enviado con 3 días de anticipación a: ${emailCliente} | Invoice ID: ${finalizedInvoice.id}`);
 
       } catch (stripeErr) {
         console.error(`[CRON STRIPE ERROR] Error procesando pasarela para la cuota ${cuotaRef.path}:`, stripeErr);

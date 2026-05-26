@@ -523,7 +523,8 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       });
     } else {
       const numCuotas = parseInt(cantidadCuotas) || 1;
-      const netoBase = parseFloat(montoNetoCuota) || 0;
+      // Si es arbitrario, las cuotas nacen en 0 para que tú digites cada cantidad
+      const netoBase = frecuenciaPlan === 'arbitrario' ? 0 : (parseFloat(montoNetoCuota) || 0);
 
       for (let i = 1; i <= numCuotas; i++) {
         if (i > 1) {
@@ -1329,7 +1330,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           {faseModal === 2 && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
               
-              {/* REQUERIMIENTO MULTIMONEDA: Soporte nativo y selección del plan */}
+              {/* REQUERIMIENTO MULTIMONEDA */}
               <FormControl fullWidth>
                 <InputLabel>Moneda de la Deuda</InputLabel>
                 <Select value={monedaPlan} label="Moneda de la Deuda" onChange={e => setMonedaPlan(e.target.value)}>
@@ -1350,29 +1351,17 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                       <MenuItem value="mensual">Mensual (Proyección automática)</MenuItem>
                       <MenuItem value="trimestral">Trimestral (Proyección automática)</MenuItem>
                       <MenuItem value="semestral">Semestral (Proyección automática)</MenuItem>
-                      <MenuItem value="arbitrario">Fechas y Montos Arbitrarios (En blanco)</MenuItem>
+                      <MenuItem value="arbitrario">Fechas y Montos Arbitrarios (Granular)</MenuItem>
                     </Select>
                   </FormControl>
 
                   <TextField 
                     label="Concepto Raíz de la Obligación" 
-                    placeholder="Ej: Honorarios Profesionales por Litigio"
+                    placeholder="Ej: Honorarios Profesionales"
                     fullWidth 
                     required 
                     value={conceptoCuota} 
                     onChange={e => setConceptoCuota(e.target.value)} 
-                  />
-
-                  <TextField 
-                    label={`Monto Neto por Cuota (${monedaPlan.toUpperCase()})`}
-                    type="number" 
-                    fullWidth 
-                    required={frecuenciaPlan !== 'arbitrario'}
-                    disabled={frecuenciaPlan === 'arbitrario'}
-                    placeholder={frecuenciaPlan === 'arbitrario' ? "Se definirá en el paso 3" : ""}
-                    slotProps={{ input: { step: 'any' } }}
-                    value={montoNetoCuota} 
-                    onChange={e => setMontoNetoCuota(e.target.value)} 
                   />
 
                   <TextField 
@@ -1383,30 +1372,45 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                     value={cantidadCuotas} 
                     onChange={e => setCantidadCuotas(e.target.value)} 
                   />
-                  
-                  {frecuenciaPlan !== 'arbitrario' && montoNetoCuota && !isNaN(parseFloat(montoNetoCuota)) && (
-                    <Box sx={{ p: 1.5, bgcolor: '#f1f5f9', borderRadius: 1.5 }}>
-                      <Typography variant="caption" color="text.secondary" display="block">
-                        Base Neto: {monedaPlan === 'crc' ? '¢' : '$'}{parseFloat(montoNetoCuota).toFixed(2)}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" display="block">
-                        IVA Costa Rica (13%): {monedaPlan === 'crc' ? '¢' : '$'}{(parseFloat(montoNetoCuota) * 0.13).toFixed(2)}
-                      </Typography>
-                      <Typography variant="subtitle2" fontWeight="bold" color="primary.main">
-                        Total por Cuota: {monedaPlan === 'crc' ? '¢' : '$'}{(parseFloat(montoNetoCuota) * 1.13).toFixed(2)}
-                      </Typography>
-                    </Box>
-                  )}
 
-                  <TextField 
-                    label={frecuenciaPlan === 'arbitrario' ? "Referencia Cronológica Inicial" : "Fecha de la Primera Cuota"} 
-                    type="date" 
-                    fullWidth 
-                    required={frecuenciaPlan !== 'arbitrario'}
-                    slotProps={{ inputLabel: { shrink: true } }} 
-                    value={fechaVencimientoCuota} 
-                    onChange={e => setFechaVencimientoCuota(e.target.value)} 
-                  />
+                  {/* CAMPOS CONDICIONALES: Solo aparecen si NO es arbitrario */}
+                  {frecuenciaPlan !== 'arbitrario' && (
+                    <>
+                      <TextField 
+                        label={`Monto Neto por Cuota (${monedaPlan.toUpperCase()})`}
+                        type="number" 
+                        fullWidth 
+                        required 
+                        slotProps={{ input: { step: 'any' } }}
+                        value={montoNetoCuota} 
+                        onChange={e => setMontoNetoCuota(e.target.value)} 
+                      />
+                      
+                      {montoNetoCuota && !isNaN(parseFloat(montoNetoCuota)) && (
+                        <Box sx={{ p: 1.5, bgcolor: '#f1f5f9', borderRadius: 1.5 }}>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            Base Neto: {monedaPlan === 'crc' ? '¢' : '$'}{parseFloat(montoNetoCuota).toFixed(2)}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            IVA Costa Rica (13%): {monedaPlan === 'crc' ? '¢' : '$'}{(parseFloat(montoNetoCuota) * 0.13).toFixed(2)}
+                          </Typography>
+                          <Typography variant="subtitle2" fontWeight="bold" color="primary.main">
+                            Total por Cuota: {monedaPlan === 'crc' ? '¢' : '$'}{(parseFloat(montoNetoCuota) * 1.13).toFixed(2)}
+                          </Typography>
+                        </Box>
+                      )}
+
+                      <TextField 
+                        label="Fecha de la Primera Cuota" 
+                        type="date" 
+                        fullWidth 
+                        required
+                        slotProps={{ inputLabel: { shrink: true } }} 
+                        value={fechaVencimientoCuota} 
+                        onChange={e => setFechaVencimientoCuota(e.target.value)} 
+                      />
+                    </>
+                  )}
                 </>
               ) : (
                 <>
