@@ -7,9 +7,11 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 // =====================================================================================
-// INICIALIZACIÓN ESTRUCTURAL DE STRIPE (Añadida de forma limpia)
+// INICIALIZACIÓN DE STRIPE PARA STANDAR v7 (Sin usar functions.config())
 // =====================================================================================
-const stripeSecret = process.env.STRIPE_SECRET_KEY || functions.config().stripe?.secret;
+// Se añade un fallback de texto para evitar que la librería de Stripe colapse el analizador
+// de Firebase CLI durante el empaquetado ('firebase deploy').
+const stripeSecret = process.env.STRIPE_SECRET_KEY || 'sk_placeholder_for_deployment_analysis';
 const stripe = require('stripe')(stripeSecret);
 
 /**
@@ -162,10 +164,10 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
 });
 
 // =====================================================================================
-// NUEVO 1. MOTOR CRON: Tarea programada nocturna para emisión automática de cobros
+// MOTOR CRON: Tarea programada nocturna para emisión automática de cobros
 // =====================================================================================
 exports.nightlyBillingCron = functions.pubsub
-  .schedule('0 0 * * *') // Se ejecuta estrictamente cada medianoche (Hora de Costa Rica)
+  .schedule('0 0 * * *') 
   .timeZone('America/Costa_Rica')
   .onRun(async (context) => {
     const hoyCR = obtenerFechaActualCR();
@@ -268,11 +270,11 @@ exports.nightlyBillingCron = functions.pubsub
   });
 
 // =====================================================================================
-// NUEVO 2. WEBHOOK RECEPTOR: Captura y conciliación automática de pagos en línea
+// WEBHOOK RECEPTOR: Captura y conciliación automática de pagos en línea
 // =====================================================================================
 exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
   const sig = req.headers['stripe-signature'];
-  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET || functions.config().stripe?.webhook_secret;
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_placeholder_for_deployment_analysis';
   
   let event;
 
@@ -326,7 +328,7 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
         estado_pago: 'Pagado'
       });
 
-      await db.collection('logs_auditoria').add({
+      await db.collection('logs_auditory').add({
         usuario: 'STRIPE_WEBHOOK_AUTOMATICO',
         accion: 'Conciliación Automática de Pago',
         detalles: `El sistema validó el pago digital de la factura "${cuotaData.concepto}" por la suma total de cobro correspondiente al caso ID: ${casoId}`,
@@ -343,7 +345,7 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
 });
 
 // =====================================================================================
-// NUEVO 3. TRIGGER BASE DE DATOS: Cancelación / Void externa en Stripe ante Recaudación Manual
+// TRIGGER BASE DE DATOS: Cancelación / Void externa en Stripe ante Recaudación Manual
 // =====================================================================================
 exports.syncStripeInvoiceStatus = functions.firestore
   .document('casos/{casoId}/clientes/{clienteId}/plan_pagos/{cuotaId}')
