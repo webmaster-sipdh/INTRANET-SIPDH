@@ -176,18 +176,19 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
 });
 
 // =====================================================================================
-// MOTOR CRON: Tarea programada nocturna v2 con escaneo anticipado de 3 días
+// MOTOR CRON: Tarea programada nocturna v2 con cálculo dinámico de vencimiento real
 // =====================================================================================
 exports.nightlyBillingCron = onSchedule({
   schedule: '0 0 * * *', 
   timeZone: 'America/Costa_Rica'
 }, async (event) => {
   const hoyCR = obtenerFechaActualCR();
-  // Calculamos el objetivo de escaneo: buscar lo que vence exactamente en 3 días
-  const diasAnticipacion = 3;
-  const targetFechaVencimientoCR = obtenerFechaFuturaCR(diasAnticipacion);
+  
+  // El radar del Cron escanea hasta una semana hacia el futuro para no dejar cuotas por fuera
+  const rangoRadarDias = 7;
+  const targetFechaVencimientoCR = obtenerFechaFuturaCR(rangoRadarDias);
 
-  console.log(`[CRON] Iniciando barrido nocturno el día ${hoyCR}. Buscando obligaciones que vencen el: ${targetFechaVencimientoCR} (Anticipación de ${diasAnticipacion} días)`);
+  console.log(`[CRON] Iniciando barrido nocturno el día ${hoyCR}. Buscando obligaciones que venzan hasta el: ${targetFechaVencimientoCR}`);
 
   // REQUERIMIENTO COMPUESTO v4.4: Consulta de tasa oficial al BCCR para el día del disparo
   let tipoCambioVentaBCCR = 1;
@@ -204,14 +205,13 @@ exports.nightlyBillingCron = onSchedule({
 
   try {
     // BUSCA TODO LO QUE VENZA DESDE HOY HASTA LOS PRÓXIMOS 7 DÍAS 
-    // (Así captura cuotas de hoy, de mañana o deudas rezagadas sin procesar)
     const snapshotCuotas = await db.collectionGroup('plan_pagos')
       .where('estado', '==', 'pendiente')
       .where('fecha_vencimiento', '<=', targetFechaVencimientoCR)
       .get();
 
     if (snapshotCuotas.empty) {
-      console.log(`[CRON] No se detectaron cuotas que venzan en los próximos 3 días (${targetFechaVencimientoCR}).`);
+      console.log(`[CRON] No se detectaron cuotas pendientes en el rango analizado.`);
       return null;
     }
 
@@ -220,6 +220,7 @@ exports.nightlyBillingCron = onSchedule({
     for (const docCuota of snapshotCuotas.docs) {
       const cuotaData = docCuota.data();
       const cuotaRef = docCuota.ref;
+      
       // ESCUDO: Si ya se le generó una factura de Stripe antes, la saltamos para evitar duplicados
       if (cuotaData.stripe_invoice_id) {
         continue;
@@ -247,6 +248,20 @@ exports.nightlyBillingCron = onSchedule({
       try {
         let stripeCustomerId = clienteData.stripe_customer_id;
 
+        // 🔄 VALIDACIÓN AUTO-CURATIVA: Si hay un ID en DB, verificamos que siga existiendo en los servidores de Stripe
+        if (stripeCustomerId) {
+          try {
+            await stripe.customers.retrieve(stripeCustomerId);
+          } catch (errRetrieve) {
+            if (errRetrieve.code === 'resource_missing') {
+              console.log(`[CRON WARNING] El cliente ${stripeCustomerId} fue borrado en Stripe. Forzando recreación de perfil.`);
+              stripeCustomerId = null;
+            } else {
+              throw errRetrieve;
+            }
+          }
+        }
+
         if (!stripeCustomerId) {
           console.log(`[CRON] Creando perfil de cliente en Stripe para: ${emailCliente}`);
           const customer = await stripe.customers.create({
@@ -261,31 +276,48 @@ exports.nightlyBillingCron = onSchedule({
           });
         }
 
+        // 📅 CÁLCULO MATEMÁTICO DEL VENCIMIENTO DINÁMICO REAL DE CADA OBLIGACIÓN
+        const fechaVenObjeto = new Date(cuotaData.fecha_vencimiento + 'T00:00:00');
+        const fechaHoyObjeto = new Date(hoyCR + 'T00:00:00');
+        const diferenciaTiempo = fechaVenObjeto.getTime() - fechaHoyObjeto.getTime();
+        
+        let diasParaVencer = Math.ceil(diferenciaTiempo / (1000 * 60 * 60 * 24));
+
+        // Escudo regulatorio de Stripe: Exige mínimo 1 día para disparar facturas por correo.
+        if (diasParaVencer < 1) {
+          diasParaVencer = 1;
+        }
+
         const monedaFormateada = (cuotaData.moneda || 'usd').toLowerCase();
 
-        // RESPALDO: Si monto_total es cero o no existe, toma el monto_neto del pago arbitrario
+        // RESPALDO FINANCIERO: Si monto_total es cero o no existe, toma el monto_neto del pago arbitrario
         const montoFinal = cuotaData.monto_total || cuotaData.monto_neto || 0;
-
         const unidadesMoneda = obtenerUnidadesStripe(montoFinal, monedaFormateada);
 
-        console.log(`[CRON] Fijando hito financiero en Stripe por valor de: ${cuotaData.monto_total} ${monedaFormateada.toUpperCase()}`);
+        // --- ⚙️ ORDEN REORGANIZADO INTEGRAL PARA EVITAR FACTURAS EN $0.00 (RACE CONDITION) ---
+
+        // Paso A: Crear primero el borrador de la factura vacía calculando sus días reales
+        const invoice = await stripe.invoices.create({
+          customer: stripeCustomerId,
+          auto_advance: true,
+          collection_method: 'send_invoice',
+          days_until_due: diasParaVencer, 
+          metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
+        });
+
+        console.log(`[CRON] Inyectando hito financiero a Invoice ${invoice.id} por valor de: ${montoFinal} ${monedaFormateada.toUpperCase()} (Vence en ${diasParaVencer} días)`);
+        
+        // Paso B: Crear el hito amarrándolo DIRECTAMENTE al ID de la factura generada en el paso anterior
         await stripe.invoiceItems.create({
           customer: stripeCustomerId,
           amount: unidadesMoneda,
           currency: monedaFormateada,
           description: cuotaData.concepto,
+          invoice: invoice.id, 
           metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
         });
 
-        // MODIFICACIÓN CLAVE: Cambiamos days_until_due a 3 para que venza justo el día programado en la intranet
-        const invoice = await stripe.invoices.create({
-          customer: stripeCustomerId,
-          auto_advance: true,
-          collection_method: 'send_invoice',
-          days_until_due: diasAnticipacion, 
-          metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
-        });
-
+        // Paso C: Finalizar y emitir la factura que ya tiene el dinero cargado con total garantía
         const finalizedInvoice = await stripe.invoices.sendInvoice(invoice.id);
 
         await cuotaRef.update({
@@ -296,7 +328,7 @@ exports.nightlyBillingCron = onSchedule({
           tipo_cambio_banco: tipoCambioVentaBCCR
         });
 
-        console.log(`[CRON SUCCESS] Cobro electrónico enviado con 3 días de anticipación a: ${emailCliente} | Invoice ID: ${finalizedInvoice.id}`);
+        console.log(`[CRON SUCCESS] Cobro electrónico enviado. Sincronizado perfectamente con vencimiento al: ${cuotaData.fecha_vencimiento} | Invoice ID: ${finalizedInvoice.id}`);
 
       } catch (stripeErr) {
         console.error(`[CRON STRIPE ERROR] Error procesando pasarela para la cuota ${cuotaRef.path}:`, stripeErr);
