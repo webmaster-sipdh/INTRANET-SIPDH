@@ -337,7 +337,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       setLoading(false);
     });
 
-    const unsubNotas = onSnapshot(query(collection(db, 'casos', casoId, 'clientes', clienteId, 'notes'), orderBy('fecha', 'desc')), (snap) => {
+    const unsubNotas = onSnapshot(query(collection(db, 'casos', casoId, 'clientes', clienteId, 'notas'), orderBy('fecha', 'desc')), (snap) => {
       setNotas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
@@ -429,7 +429,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
   const handleAddNota = async () => {
     if (!nuevaNota.trim()) return;
     try {
-      const refNotas = collection(db, 'casos', casoId, 'clientes', clienteId, 'notes');
+      const refNotas = collection(db, 'casos', casoId, 'clientes', clienteId, 'notas');
       await addDoc(refNotas, { 
         texto: nuevaNota.trim(), 
         fecha: serverTimestamp() 
