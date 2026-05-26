@@ -206,21 +206,28 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
   const [historialComunicados, setHistorialComunicados] = useState([]);
   const [loadingHistorial, setLoadingHistorial] = useState(false);
 
-  // ESTADOS DE CONTROL FINANCIERO CON FLEXIBILIDAD DE FECHAS TOTALES
+  // ESTADOS DE CONTROL FINANCIERO AVANZADO E HÍBRIDO
   const [planPagos, setPlanPagos] = useState([]);
   const [openCuotaModal, setOpenCuotaModal] = useState(false);
   const [openPagoManualModal, setOpenPagoManualModal] = useState(false);
   
-  // Asistente de Proyección Dinámica sin Frecuencias Predefinidas
-  const [faseModal, setFaseModal] = useState(1); // 1: Configuración base, 2: Calendario Libre
-  const [tipoEstructura, setTipoEstructura] = useState('plan'); 
+  // Lista de Plantillas de Planes Generales cargadas desde Firestore
+  const [planesGeneralesLista, setPlanesGeneralesLista] = useState([]);
+  
+  // Estados de control del Asistente (Wizard) de Deudas
+  const [faseModal, setFaseModal] = useState(1); // Paso 1: Origen, Paso 2: Parametrización, Paso 3: Ajuste Fino
+  const [origenPlan, setOrigenPlan] = useState('personalizado'); // 'personalizado' o 'plantilla'
+  const [plantillaSeleccionada, setPlantillaSeleccionada] = useState(null);
+
+  // Campos de Configuración Base
   const [conceptoCuota, setConceptoCuota] = useState('');
   const [montoNetoCuota, setMontoNetoCuota] = useState(''); 
   const [fechaVencimientoCuota, setFechaVencimientoCuota] = useState(''); 
   const [cantidadCuotas, setCantidadCuotas] = useState('4'); 
+  const [frecuenciaPlan, setFrecuenciaPlan] = useState('mensual'); // 'mensual', 'trimestral', 'semestral', 'arbitrario'
   const [metodoCobroCuota, setMetodoCobroCuota] = useState('stripe');
   
-  // Lista de cuotas temporales en memoria para ajustar plazos a mano
+  // Tabla interna en memoria para el Paso 3 (Ajuste Fino de montos y fechas)
   const [cuotasProyectadas, setCuotasProyectadas] = useState([]);
 
   // Campos formulario de Registro Posterior de Pagos Hechos (Conciliación)
@@ -277,7 +284,12 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       setPlanPagos(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    // 5. Escuchador Live para la subcolección autónoma con los DATOS COMPLETOS del comunicado
+    // 5. Escuchador Live para la colección global de Planes Generales preestablecidos
+    const unsubPlanesGenerales = onSnapshot(collection(db, 'planes_generales'), (snap) => {
+      setPlanesGeneralesLista(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    // 6. Escuchador Live para la subcolección autónoma con los DATOS COMPLETOS del comunicado
     setLoadingHistorial(true);
     const historialRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'historial_comunicados');
     const unsubHistorial = onSnapshot(historialRef, (snapHistorial) => {
@@ -313,6 +325,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       unsubNotas();
       unsubDocs();
       unsubPagos();
+      unsubPlanesGenerales();
       unsubHistorial();
     };
   }, [casoId, clienteId]);
@@ -433,107 +446,121 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     }
   };
 
-  // PROYECTOR COMPUESTO PURO: Inicializa las filas vacías para obligar al ingreso manual de plazos libres
-  const ejecutarAvanzaProyeccionDePlazos = () => {
-    if (!conceptoCuota.trim() || !montoNetoCuota) return;
-
-    const numCuotas = parseInt(cantidadCuotas) || 1;
+  // ASISTENTE DE PROYECCIÓN FINANCIERA: Transforma la regla seleccionada en renglones editables en memoria
+  const generarBorradorDePlanYAvancePaso3 = () => {
     const listaTemporal = [];
+    let fechaBase = fechaVencimientoCuota ? new Date(fechaVencimientoCuota + 'T00:00:00') : new Date();
 
-    for (let i = 1; i <= numCuotas; i++) {
-      listaTemporal.push({
-        idTemp: 'temp_' + i + '_' + Date.now(),
-        concepto: `Cuota ${i}/${numCuotas} - ${conceptoCuota.trim()}`,
-        monto_neto: parseFloat(montoNetoCuota),
-        fecha_vencimiento: '' // Forzamos el campo vacío para obligar a definir la fecha a mano
+    if (origenPlan === 'plantilla' && plantillaSeleccionada) {
+      // CARGAR DE PLAN GENERAL PREESTABLECIDO: Mapea los hitos relativos de la plantilla
+      const cuotasPlantilla = plantillaSeleccionada.cuotas || [];
+      cuotasPlantilla.forEach((cPlantilla, idx) => {
+        let fechaCuota = new Date(fechaBase.getTime());
+        const desplazo = parseInt(cPlantilla.meses_desplazamiento || 0);
+        if (desplazo > 0) {
+          fechaCuota.setMonth(fechaCuota.getMonth() + desplazo);
+        }
+        
+        const yyyy = fechaCuota.getFullYear();
+        const mm = String(fechaCuota.getMonth() + 1).padStart(2, '0');
+        const dd = String(fechaCuota.getDate()).padStart(2, '0');
+
+        listaTemporal.push({
+          idTemp: 'temp_' + idx + '_' + Date.now() + '_' + Math.random(),
+          concepto: cPlantilla.concepto,
+          monto_neto: parseFloat(cPlantilla.monto_neto) || 0,
+          fecha_vencimiento: `${yyyy}-${mm}-${dd}`
+        });
       });
+    } else {
+      // COMPORTAMIENTO DESDE CERO: Proyecta según la frecuencia elegida
+      const numCuotas = parseInt(cantidadCuotas) || 1;
+      const netoBase = parseFloat(montoNetoCuota) || 0;
+
+      for (let i = 1; i <= numCuotas; i++) {
+        if (i > 1) {
+          if (frecuenciaPlan === 'mensual') {
+            fechaBase.setMonth(fechaBase.getMonth() + 1);
+          } else if (frecuenciaPlan === 'trimestral') {
+            fechaBase.setMonth(fechaBase.getMonth() + 3);
+          } else if (frecuenciaPlan === 'semestral') {
+            fechaBase.setMonth(fechaBase.getMonth() + 6);
+          }
+        }
+
+        const yyyy = fechaBase.getFullYear();
+        const mm = String(fechaBase.getMonth() + 1).padStart(2, '0');
+        const dd = String(fechaBase.getDate()).padStart(2, '0');
+        
+        // Si es arbitrario, las fechas nacen completamente vacías para rellenarse a mano
+        const fechaString = frecuenciaPlan === 'arbitrario' ? '' : `${yyyy}-${mm}-${dd}`;
+
+        listaTemporal.push({
+          idTemp: 'temp_' + i + '_' + Date.now() + '_' + Math.random(),
+          concepto: `Cuota ${i}/${numCuotas} - ${conceptoCuota.trim()}`,
+          monto_neto: netoBase,
+          fecha_vencimiento: fechaString
+        });
+      }
     }
 
     setCuotasProyectadas(listaTemporal);
-    setFaseModal(2); // Desborda a la pantalla de plazos personalizados
+    setFaseModal(3); // Salta directamente al tablero de ajuste fino
   };
 
-  // ENVÍO DE DATOS CONTABLE: Consolida y persiste de forma inmutable el plan en Firestore
+  // PERSISTENCIA FINAL: Toma la bitácora personalizada del Paso 3 e inyecta la deuda en Firestore
   const handleCrearCuotaEstructurada = async (e) => {
     e.preventDefault();
-
-    if (tipoEstructura === 'plan' && faseModal === 1) {
-      ejecutarAvanzaProyeccionDePlazos();
-      return;
-    }
 
     setError('');
     setSuccess('');
     const planPagosRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos');
 
     try {
-      if (tipoEstructura === 'unica') {
-        const netoBase = parseFloat(montoNetoCuota);
-        const ivaCalculado = netoBase * 0.13; // 13% IVA Costa Rica
-        const total = netoBase + ivaCalculado;
+      // Inyección granular inalterada en bucle de cada documento del plan personalizado
+      for (const item of cuotasProyectadas) {
+        const neto = parseFloat(item.monto_neto) || 0;
+        const ivaCalculado = neto * 0.13; // Cálculo estricto del 13% IVA Costa Rica
+        const total = neto + ivaCalculado;
 
         await addDoc(planPagosRef, {
-          concepto: conceptoCuota.trim(),
-          monto_neto: netoBase,
+          concepto: item.concepto.trim(),
+          monto_neto: neto,
           iva: ivaCalculado,
           monto_total: total,
-          fecha_vencimiento: fechaVencimientoCuota,
+          fecha_vencimiento: item.fecha_vencimiento, // Plazo e hito 100% libre e independiente
           estado: 'pendiente',
-          metodo_pago: metodoCobroCuota, 
+          metodo_pago: metodoCobroCuota,
           stripe_invoice_id: null,
           stripe_invoice_url: null,
           fecha_pago_realizado: null,
           registrado_por: null,
           comprobante_referencia: ''
         });
-
-        await registrarLogAuditoria(
-          currentUserEmail,
-          'Estructuración de Obligación Única',
-          `Se proyectó cuota individual adeudada de honorarios por $${total.toFixed(2)} para ${apellidos}, ${nombres}`
-        );
-      } else {
-        // PERSISTENCIA DEL PASO 2: Guarda cada cuota con la fecha libre que el abogado digitó
-        for (const item of cuotasProyectadas) {
-          const neto = parseFloat(item.monto_neto) || 0;
-          const ivaCalculado = neto * 0.13;
-          const total = neto + ivaCalculado;
-
-          await addDoc(planPagosRef, {
-            concepto: item.concepto.trim(),
-            monto_neto: neto,
-            iva: ivaCalculado,
-            monto_total: total,
-            fecha_vencimiento: item.fecha_vencimiento, // Plazo 100% libre e independiente
-            estado: 'pendiente',
-            metodo_pago: metodoCobroCuota,
-            stripe_invoice_id: null,
-            stripe_invoice_url: null,
-            fecha_pago_realizado: null,
-            registrado_por: null,
-            comprobante_referencia: ''
-          });
-        }
-
-        await registrarLogAuditoria(
-          currentUserEmail,
-          'Establecimiento de Plan Financiero Personalizado',
-          `Se estructuró calendario total de ${cuotasProyectadas.length} cuotas con vencimientos libres para ${apellidos}, ${nombres}`
-        );
       }
 
+      await registrarLogAuditoria(
+        currentUserEmail,
+        'Establecimiento de Plan Financiero Avanzado',
+        `Se inyectó un calendario de ${cuotasProyectadas.length} cuotas personalizadas para ${apellidos}, ${nombres}`
+      );
+
+      // Resetear estados del Wizard completo
       setConceptoCuota('');
       setMontoNetoCuota('');
       setFechaVencimientoCuota('');
       setMetodoCobroCuota('stripe');
       setTipoEstructura('plan');
       setCantidadCuotas('4');
+      setFrecuenciaPlan('mensual');
+      setOrigenPlan('personalizado');
+      setPlantillaSeleccionada(null);
       setCuotasProyectadas([]);
       setFaseModal(1);
       setOpenCuotaModal(false);
-      setSuccess('Plan de cuotas con vencimientos personalizados establecido correctamente.');
+      setSuccess('Plan de cuotas y vencimientos establecido correctamente en el expediente.');
     } catch (err) {
-      setError('Error al registrar la estructura de cuotas en el servidor.');
+      setError('Error al registrar la estructura impositiva de cuotas en el servidor.');
     }
   };
 
@@ -920,7 +947,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         </Box>
       </Box>
 
-      {/* MODAL WIZARD: SECCIÓN PURA DE CREACIÓN Y ESTRUCTURACIÓN DE PLANES DE DEUDA LIBRE */}
+      {/* MODAL WIZARD GLOBAL DE PLANES DE DEUDA: ORIGEN -> PARÁMETROS -> AJUSTE FINO */}
       <Dialog
         open={openCuotaModal}
         onClose={() => {
@@ -941,88 +968,139 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         }}
       >
         <DialogTitle fontWeight="bold">
-          {faseModal === 1 ? 'Establecer Plan de Pagos' : 'Definir Fechas y Plazos del Plan'}
+          {faseModal === 1 && 'Paso 1: Configuración del Origen'}
+          {faseModal === 2 && 'Paso 2: Parámetros de Proyección'}
+          {faseModal === 3 && 'Paso 3: Personalizar Plazos y Vencimientos'}
         </DialogTitle>
         <DialogContent dividers>
           
-          {/* PASO 1: PARÁMETROS BASE MACRO */}
+          {/* PASO 1: SELECCIÓN DEL ORIGEN (DESDE CERO O LLAMAR PLAN GENERAL PREESTABLECIDO) */}
           {faseModal === 1 && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
               <FormControl fullWidth>
-                <InputLabel>Estructura Financiera del Plan</InputLabel>
+                <InputLabel>Estrategia de Inicialización</InputLabel>
                 <Select 
-                  value={tipoEstructura} 
-                  label="Estructura Financiera del Plan" 
-                  onChange={e => setTipoEstructura(e.target.value)}
+                  value={origenPlan} 
+                  label="Estrategia de Inicialización" 
+                  onChange={e => {
+                    setOrigenPlan(e.target.value);
+                    setPlantillaSeleccionada(null);
+                  }}
                 >
-                  <MenuItem value="plan">Dividir en Múltiples Cuotas Proyectadas</MenuItem>
-                  <MenuItem value="unica">Registrar una Sola Cuota Aislada</MenuItem>
+                  <MenuItem value="personalizado">Crear plan personalizado desde cero</MenuItem>
+                  <MenuItem value="plantilla">Cargar un Plan General Preestablecido (Plantilla)</MenuItem>
                 </Select>
               </FormControl>
 
-              <TextField 
-                label="Concepto Raíz de la Obligación" 
-                placeholder={tipoEstructura === 'unica' ? "Ej: Cuota de Entrada / Gastos de Admisión" : "Ej: Honorarios Profesionales por Etapa"} 
-                autoFocus 
-                fullWidth 
-                required 
-                value={conceptoCuota} 
-                onChange={e => setConceptoCuota(e.target.value)} 
-              />
-
-              <TextField 
-                label={tipoEstructura === 'unica' ? "Monto Neto de la Cuota (USD)" : "Monto Neto por Cuota (USD)"}
-                type="number" 
-                fullWidth 
-                required 
-                slotProps={{ input: { step: 'any' } }}
-                value={montoNetoCuota} 
-                onChange={e => setMontoNetoCuota(e.target.value)} 
-              />
-
-              {tipoEstructura === 'plan' && (
-                <TextField 
-                  label="¿En cuántos pagos desea dividirlo?" 
-                  type="number" 
-                  fullWidth 
-                  required 
-                  value={cantidadCuotas} 
-                  onChange={e => setCantidadCuotas(e.target.value)} 
-                />
+              {origenPlan === 'plantilla' && (
+                <FormControl fullWidth>
+                  <InputLabel>Seleccionar Plan Preestablecido</InputLabel>
+                  <Select 
+                    value={plantillaSeleccionada ? plantillaSeleccionada.id : ''} 
+                    label="Seleccionar Plan Preestablecido" 
+                    required
+                    onChange={e => {
+                      const found = planesGeneralesLista.find(p => p.id === e.target.value);
+                      setPlantillaSeleccionada(found || null);
+                    }}
+                  >
+                    {planesGeneralesLista.map(p => (
+                      <MenuItem key={p.id} value={p.id}>{p.nombre} ({p.cuotas?.length || 0} cuotas)</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
               )}
-              
-              {montoNetoCuota && !isNaN(parseFloat(montoNetoCuota)) && (
-                <Box sx={{ p: 1.5, bgcolor: '#f1f5f9', borderRadius: 1.5 }}>
-                  <Typography variant="caption" color="text.secondary" display="block" fontWeight="bold">
-                    {tipoEstructura === 'unica' ? "Cálculo de la Cuota:" : "Cálculo por Cuota Planificada:"}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    Base Honorario Neto: ${parseFloat(montoNetoCuota).toFixed(2)}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    IVA de Costa Rica (13%): ${(parseFloat(montoNetoCuota) * 0.13).toFixed(2)}
-                  </Typography>
-                  <Typography variant="subtitle2" fontWeight="bold" color="primary.main">
-                    Total Exigible por Cuota: ${(parseFloat(montoNetoCuota) * 1.13).toFixed(2)}
-                  </Typography>
-                  {tipoEstructura === 'plan' && (
-                    <Typography variant="caption" color="success.main" display="block" sx={{ fontWeight: 'bold', mt: 0.5 }}>
-                      Compromiso Total Estimado ({cantidadCuotas} cuotas): ${(parseFloat(montoNetoCuota) * 1.13 * parseInt(cantidadCuotas || 0)).toFixed(2)}
-                    </Typography>
+            </Box>
+          )}
+
+          {/* PASO 2: REGLA DE PROYECCIÓN INICIAL (INTERVALOS DISCRETOS O VACÍO TOTAL) */}
+          {faseModal === 2 && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+              {origenPlan === 'personalizado' ? (
+                <>
+                  <FormControl fullWidth>
+                    <InputLabel>Regla de Intervalo para el Plan</InputLabel>
+                    <Select 
+                      value={frecuenciaPlan} 
+                      label="Regla de Intervalo para el Plan" 
+                      onChange={e => setFrecuenciaPlan(e.target.value)}
+                    >
+                      <MenuItem value="mensual">Mensual (Proyección automática base)</MenuItem>
+                      <MenuItem value="trimestral">Trimestral (Proyección automática base)</MenuItem>
+                      <MenuItem value="semestral">Semestral (Proyección automática base)</MenuItem>
+                      <MenuItem value="arbitrario">Fechas y Montos Arbitrarios (Nace limpio en blanco)</MenuItem>
+                    </Select>
+                  </FormControl>
+
+                  <TextField 
+                    label="Concepto Raíz de la Obligación" 
+                    placeholder="Ej: Honorarios Profesionales por Litigio"
+                    fullWidth 
+                    required 
+                    value={conceptoCuota} 
+                    onChange={e => setConceptoCuota(e.target.value)} 
+                  />
+
+                  <TextField 
+                    label="Monto Neto base por Cuota (USD)"
+                    type="number" 
+                    fullWidth 
+                    required={frecuenciaPlan !== 'arbitrario'}
+                    disabled={frecuenciaPlan === 'arbitrario'}
+                    placeholder={frecuenciaPlan === 'arbitrario' ? "Se definirá en el paso 3" : ""}
+                    slotProps={{ input: { step: 'any' } }}
+                    value={montoNetoCuota} 
+                    onChange={e => setMontoNetoCuota(e.target.value)} 
+                  />
+
+                  <TextField 
+                    label="¿En cuántos pagos desea dividirlo?" 
+                    type="number" 
+                    fullWidth 
+                    required 
+                    value={cantidadCuotas} 
+                    onChange={e => setCantidadCuotas(e.target.value)} 
+                  />
+                  
+                  {frecuenciaPlan !== 'arbitrario' && montoNetoCuota && !isNaN(parseFloat(montoNetoCuota)) && (
+                    <Box sx={{ p: 1.5, bgcolor: '#f1f5f9', borderRadius: 1.5 }}>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        Base Honorario Neto: ${parseFloat(montoNetoCuota).toFixed(2)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        IVA Costa Rica (13%): ${(parseFloat(montoNetoCuota) * 0.13).toFixed(2)}
+                      </Typography>
+                      <Typography variant="subtitle2" fontWeight="bold" color="primary.main">
+                        Total por Cuota Proyectada: ${(parseFloat(montoNetoCuota) * 1.13).toFixed(2)}
+                      </Typography>
+                    </Box>
                   )}
-                </Box>
-              )}
 
-              {tipoEstructura === 'unica' && (
-                <TextField 
-                  label="Fecha de Vencimiento" 
-                  type="date" 
-                  fullWidth 
-                  required 
-                  slotProps={{ inputLabel: { shrink: true } }} 
-                  value={fechaVencimientoCuota} 
-                  onChange={e => setFechaVencimientoCuota(e.target.value)} 
-                />
+                  <TextField 
+                    label={frecuenciaPlan === 'arbitrario' ? "Referencia Cronológica Inicial" : "Fecha de la Primera Cuota"} 
+                    type="date" 
+                    fullWidth 
+                    required={frecuenciaPlan !== 'arbitrario'}
+                    slotProps={{ inputLabel: { shrink: true } }} 
+                    value={fechaVencimientoCuota} 
+                    onChange={e => setFechaVencimientoCuota(e.target.value)} 
+                  />
+                </>
+              ) : (
+                <>
+                  <Typography variant="body2" color="text.secondary">
+                    Has seleccionado la plantilla: <strong>{plantillaSeleccionada?.nombre}</strong>. Se generará un plan de {plantillaSeleccionada?.cuotas?.length} pagos según su configuración original.
+                  </Typography>
+                  <TextField 
+                    label="Fecha Base para el Inicio del Plan" 
+                    type="date" 
+                    fullWidth 
+                    required 
+                    slotProps={{ inputLabel: { shrink: true } }} 
+                    value={fechaVencimientoCuota} 
+                    onChange={e => setFechaVencimientoCuota(e.target.value)} 
+                  />
+                </>
               )}
 
               <FormControl fullWidth>
@@ -1039,11 +1117,11 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
             </Box>
           )}
 
-          {/* PASO 2: LIBERTAD TOTAL DE PLAZOS (FECHAS TOTALMENTE EN BLANCO PARA RELLENAR A MANO SIN INTERVALOS FIJOS) */}
-          {tipoEstructura === 'plan' && faseModal === 2 && (
+          {/* PASO 3: TABLERO DE AJUSTE FINO TOTAL (LIBERTAD SOBERANA PARA CAMBIAR FECHAS Y MONTOS FILA POR FILA) */}
+          {faseModal === 3 && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: '420px', overflowY: 'auto', pt: 1 }}>
               <Alert severity="info" sx={{ borderRadius: 2, fontSize: '0.8rem', py: 0.5, mb: 1 }}>
-                Asigne la fecha exacta de vencimiento para cada pago individual. No requieren seguir ningún patrón fijo.
+                Modifique de forma totalmente libre la fecha, concepto o monto de cada pago. No requieren seguir ningún patrón rígido.
               </Alert>
               {cuotasProyectadas.map((item, idx) => (
                 <Box 
@@ -1059,12 +1137,12 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                   }}
                 >
                   <Typography variant="caption" fontWeight="bold" color="primary.main">
-                    VENCIMIENTO DE LA CUOTA {idx + 1}
+                    EDICIÓN INDEPENDIENTE - PAGO {idx + 1}
                   </Typography>
                   
                   <TextField
                     size="small"
-                    label="Concepto de la cuota"
+                    label="Concepto específico de la cuota"
                     fullWidth
                     required
                     value={item.concepto}
@@ -1090,7 +1168,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                     />
                     <TextField
                       size="small"
-                      label="Fecha Límite"
+                      label="Fecha de Vencimiento"
                       type="date"
                       required
                       slotProps={{ inputLabel: { shrink: true } }}
@@ -1103,7 +1181,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                     />
                   </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right', display: 'block', mt: -0.5, fontSize: '0.68rem' }}>
-                    IVA 13%: ${(item.monto_neto * 0.13).toFixed(2)} | Total: ${(item.monto_neto * 1.13).toFixed(2)}
+                    IVA Costa Rica (13%): ${(item.monto_neto * 0.13).toFixed(2)} | Total: ${(item.monto_neto * 1.13).toFixed(2)}
                   </Typography>
                 </Box>
               ))}
@@ -1112,9 +1190,9 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
 
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
-          {faseModal === 2 && (
+          {faseModal > 1 && (
             <Button 
-              onClick={() => setFaseModal(1)} 
+              onClick={() => setFaseModal(prev => prev - 1)} 
               color="primary" 
               sx={{ textTransform: 'none', mr: 'auto' }}
             >
@@ -1132,11 +1210,29 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           >
             Cancelar
           </Button>
-          <Button type="submit" variant="contained" sx={{ textTransform: 'none', fontWeight: 'bold' }}>
-            {tipoEstructura === 'unica' 
-              ? 'Guardar Cuota' 
-              : (faseModal === 1 ? 'Siguiente: Definir Fechas' : 'Confirmar Calendario Completo')}
-          </Button>
+          
+          {faseModal < 3 ? (
+            <Button 
+              variant="contained" 
+              disabled={faseModal === 1 && origenPlan === 'plantilla' && !plantillaSeleccionada}
+              onClick={() => {
+                if (faseModal === 1) setFaseModal(2);
+                else if (faseModal === 2) generarBorradorDePlanYAvancePaso3();
+              }}
+              sx={{ textTransform: 'none', fontWeight: 'bold' }}
+            >
+              Siguiente
+            </Button>
+          ) : (
+            <Button 
+              type="submit" 
+              variant="contained" 
+              onClick={handleCrearCuotaEstructurada}
+              sx={{ textTransform: 'none', fontWeight: 'bold' }}
+            >
+              Confirmar Calendario Completo
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 
