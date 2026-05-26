@@ -41,7 +41,7 @@ export default function Login({ institutionalError, setInstitutionalError }) {
         {/* 🚀 LOGO INSTITUCIONAL: Ajustado a 300x92px reales */}
         <Box sx={{ mb: 4, display: 'flex', justifyContent: 'center' }}>
           <img 
-            src="/SIPDH.png" 
+            src="/SIPDH-azul.png" 
             alt="Logo SIPDH" 
             style={{ 
               // Usamos ancho máximo para responsividad y alto automático para mantener aspect ratio
