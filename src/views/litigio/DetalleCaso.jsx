@@ -403,7 +403,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
             nombre: file.name,
             url: downloadURL,
             storage_path: storagePath,
-            descripcion: desc.trim(),
+            description: desc.trim(),
             fecha_documento: fechaDoc,
             fecha_subida: new Date().toISOString()
           });
@@ -933,7 +933,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                     <TableCell sx={{ fontWeight: 'bold' }}>Documento de Identidad</TableCell>
                     <TableCell sx={{ fontWeight: 'bold' }}>País</TableCell>
                     <TableCell sx={{ fontWeight: 'bold' }}>Contacto Principal</TableCell>
-                    <TableCell sx={{ fontWeight: 'bold' }}>Pago Stripe</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Estado de Pagos</TableCell>
                     <TableCell sx={{ fontWeight: 'bold' }}>Acciones</TableCell>
                   </TableRow>
                 </TableHead>
@@ -957,12 +957,18 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                         </Typography>
                       </TableCell>
                       <TableCell>
-                        <Chip 
-                          label={clienteItem.estado_pago || 'Pendiente'} 
-                          size="small" 
-                          color={clienteItem.estado_pago === 'Pagado' ? 'success' : 'warning'} 
-                          sx={{ fontWeight: 'bold' }} 
-                        />
+                        {(() => {
+                          const diasMora = parseInt(clienteItem.dias_mora || 0, 10);
+                          const estado = String(clienteItem.estado_pago || '').toLowerCase().trim();
+
+                          if (estado === 'pagado' || estado === 'pagada' || diasMora <= 0) {
+                            return <Chip label="Al día" color="success" size="small" sx={{ fontWeight: 'bold', minWidth: 120 }} />;
+                          } else if (diasMora <= 30) {
+                            return <Chip label={`Mora < 30 días (${diasMora}d)`} color="warning" size="small" sx={{ fontWeight: 'bold', minWidth: 120 }} />;
+                          } else {
+                            return <Chip label={`Mora > 30 días (${diasMora}d)`} color="error" size="small" sx={{ fontWeight: 'bold', minWidth: 120 }} />;
+                          }
+                        })()}
                       </TableCell>
                       <TableCell>
                         <IconButton 
@@ -1145,7 +1151,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                       <TableRow>
                         <TableCell sx={{ fontWeight: 'bold' }}>Periodo (Año-Mes)</TableCell>
                         <TableCell sx={{ fontWeight: 'bold' }}>Base Honorario (Neto)</TableCell>
-                        <TableCell sx={{ fontWeight: 'bold', color: '#ed6c02' }}>IVA Devengado (13%)</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', color: '#ed6c02' }}>IVA Devengado (13% CR)</TableCell>
                         <TableCell sx={{ fontWeight: 'bold' }}>Monto Total Recaudado</TableCell>
                         <TableCell sx={{ fontWeight: 'bold', textAlign: 'center' }}>Canales (Stripe / Transf / Caja)</TableCell>
                       </TableRow>
@@ -1180,7 +1186,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
 
               {todasLasCuotas.length === 0 ? (
                 <Alert severity="info" sx={{ borderRadius: 2 }}>
-                  Este litigio no reporta ninguna cuota structured hasta la fecha.
+                  Este litigio no reporta ninguna cuota estructurada hasta la fecha.
                 </Alert>
               ) : (
                 <TableContainer component={Paper} sx={{ boxShadow: 'none', border: '1px solid #e2e8f0', borderRadius: 2 }}>
@@ -1316,7 +1322,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                                 {plazo.documentoProbatorioNombre || 'Ver Archivo'}
                               </Button>
                               <Typography variant="caption" display="block" color="text.primary" sx={{ fontWeight: 'medium', mt: 0.5 }}>
-                                {plazo.documentoProbatorioDescripcion}
+                                {plazo.documentoProbatorioDescription}
                               </Typography>
                               <Typography variant="caption" display="block" color="text.secondary">
                                 Fecha Doc: {plazo.documentoProbatorioFechaDocumento || 'No asignada'}
