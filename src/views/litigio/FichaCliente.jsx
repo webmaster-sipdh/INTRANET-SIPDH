@@ -73,12 +73,14 @@ const DOC_TYPES = [
   'Otro'
 ];
 
-// REQUERIMIENTO FACTURACIÓN HACIENDA CR: Tipos de identificación fiscal autorizados
+// REQUERIMIENTO FACTURACIÓN HACIENDA CR v4.4: Tipos de identificación fiscal autorizados ampliados
 const FISCAL_ID_TYPES = [
   'Cédula Física',
   'Cédula Jurídica',
   'DIMEX',
-  'NITE'
+  'NITE',
+  'Extranjero No Domiciliado',
+  'No Contribuyente'
 ];
 
 const COUNTRIES = [
@@ -108,16 +110,15 @@ const COUNTRIES = [
 ];
 
 // =====================================================================================
-// UTILERÍA FINANCIERA CORREGIDA: Definición del Semáforo de Control de Riesgos
+// UTILERÍA FINANCIERA: Definición del Semáforo de Control de Riesgos
 // =====================================================================================
 const obtenerSemaforoCuota = (estado, fechaVencimiento) => {
   const estadoLimpio = String(estado || '').toLowerCase().trim();
 
   if (estadoLimpio === 'pagada' || estadoLimpio === 'pagado') {
-    return { label: 'PAGADO', color: '#22c55e', textColor: '#ffffff' }; // Verde Esmeralda (Cumplido)
+    return { label: 'PAGADO', color: '#22c55e', textColor: '#ffffff' }; 
   }
 
-  // Si está pendiente pero la fecha límite es inferior al día de hoy, marcar como vencido de forma dinámica
   if (fechaVencimiento) {
     try {
       const hoy = new Date();
@@ -126,15 +127,14 @@ const obtenerSemaforoCuota = (estado, fechaVencimiento) => {
       const fechaLimite = new Date(anio, mes - 1, dia);
       
       if (fechaLimite < hoy) {
-        return { label: 'VENCIDO', color: '#ef4444', textColor: '#ffffff' }; // Rojo Coral (Mora)
+        return { label: 'VENCIDO', color: '#ef4444', textColor: '#ffffff' }; 
       }
     } catch (err) {
       console.error("Falla en parseo cronológico de cuota:", err);
     }
   }
 
-  // Estado por defecto o pendiente ordinario
-  return { label: 'PENDIENTE', color: '#f59e0b', textColor: '#ffffff' }; // Ámbar Intenso (Alerta de cobro)
+  return { label: 'PENDIENTE', color: '#f59e0b', textColor: '#ffffff' }; 
 };
 
 // =====================================================================================
@@ -550,6 +550,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         const ivaCalculado = neto * 0.13; 
         const total = neto + ivaCalculado;
 
+        // REQUERIMIENTO COMPUESTO: Inyección de Esquemas Estrictos de la Versión 4.4 del Ministerio de Hacienda
         await addDoc(planPagosRef, {
           concepto: item.concepto.trim(),
           monto_neto: neto,
@@ -566,9 +567,44 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           fecha_pago_realizado: null,
           registrado_por: null,
           comprobante_referencia: '',
-          codigo_actividad: "691001",
-          impuesto_codigo: "01",
+          
+          // METADATOS COMPATIBLES CON HACIENDA v4.4 (Estructura interna oculta API Ready)
+          hacienda_version: "4.4",
+          proveedor_sistemas: "0000000000", // Espacio reservado para ID de proveedor
+          codigo_actividad_emisor: "691001", // Código para servicios legales
+          codigo_actividad_receptor: cliente?.codigo_actividad_receptor || "", // Campo condicional v4.4
+          condicion_venta: origenPlan === 'plantilla' ? "01" : "02", // Contado o Crédito
+          plazo_credito: origenPlan === 'plantilla' ? 0 : 30, // Expresado forzadamente en días (Integer de 5 posiciones)
+          
+          // Detalle de Línea e Impuestos con renamings v4.4
+          codigo_cabys: "6910010000000", // Mapeo de catálogo unificado
+          unidad_medida: "Sp", // Servicios Profesionales (Nota 15)
+          impuesto_codigo: "01", // Impuesto al Valor Agregado
+          codigo_tarifa_iva: "08", // Tarifa general 13% (Obligatorio v4.4 para impuesto 01)
           impuesto_tarifa: 13,
+          
+          // Esquema de Nodos Condicionales con Nombres Quirúrgicos v4.4
+          exoneracion_subnodo: {
+            TipoDocumentoEX: "", // Renombrado en v4.4
+            NumeroDocumento: "",
+            NombreInstitucion: "",
+            FechaEmisionEX: "", // Renombrado en v4.4
+            TarifaExonerada: 0,
+            MontoExoneracion: 0
+          },
+          otros_cargos_subnodo: {
+            TipoDocumentoOC: "", // Renombrado en v4.4
+            TipoDocumentoOTRO: "",
+            PorcentajeOC: 0, // Renombrado en v4.4
+            MontoCargo: 0
+          },
+          informacion_referencia_subnodo: {
+            TipoDocIR: "", // Renombrado en v4.4
+            Numero: "",
+            FechaEmisionIR: "", // Renombrado en v4.4
+            Codigo: "",
+            Razon: ""
+          },
           facturacion_electronica_ready: true
         });
       }
@@ -597,8 +633,8 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
 
   const handleProcesarLiquidacionCascada = async (e) => {
     e.preventDefault();
-    let bolsaDinero = parseFloat(montoAbonoCascada);
-    if (!bolsaDinero || bolsaDinero <= 0) return;
+    let poolDinero = parseFloat(montoAbonoCascada);
+    if (!poolDinero || poolDinero <= 0) return;
 
     setError('');
     setSuccess('');
@@ -618,7 +654,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
 
     try {
       for (const cuota of cuotasPendientesOrdenadas) {
-        if (bolsaDinero <= 0) break;
+        if (poolDinero <= 0) break;
 
         const saldoExigibleActual = cuota.saldo_pendiente !== undefined ? cuota.saldo_pendiente : cuota.monto_total;
         const cuotaDocRef = doc(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuota.id);
@@ -628,17 +664,17 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         let nuevoSaldoPendiente = saldoExigibleActual;
         let nuevoMontoPagado = cuota.monto_pagado || 0;
 
-        if (bolsaDinero >= saldoExigibleActual) {
+        if (poolDinero >= saldoExigibleActual) {
           abonoEfectivoParaEstaCuota = saldoExigibleActual;
-          bolsaDinero -= saldoExigibleActual;
+          poolDinero -= saldoExigibleActual;
           nuevoEstado = 'pagada';
           nuevoSaldoPendiente = 0;
           nuevoMontoPagado = cuota.monto_total;
         } else {
-          abonoEfectivoParaEstaCuota = bolsaDinero;
-          nuevoSaldoPendiente = saldoExigibleActual - bolsaDinero;
-          nuevoMontoPagado = (cuota.monto_pagado || 0) + bolsaDinero;
-          bolsaDinero = 0;
+          abonoEfectivoParaEstaCuota = poolDinero;
+          nuevoSaldoPendiente = saldoExigibleActual - poolDinero;
+          nuevoMontoPagado = (cuota.monto_pagado || 0) + poolDinero;
+          poolDinero = 0;
           nuevoEstado = 'pendiente';
         }
 
@@ -649,7 +685,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           fecha_pago_realizado: fechaCR,
           periodo_fiscal: periodoFiscal,
           registrado_por: currentUserEmail,
-          metodo_pago: metodoPagoManual === 'Efectivo' ? 'efectivo' : 'transferencia',
+          metodo_pago: metodoPagoManual === 'Efectivo' ? 'efectivo' : (metodoPagoManual === 'SINPE MOVIL' ? 'sinpe' : 'transferencia'),
           comprobante_referencia: referenciaManual.trim(),
           stripe_status_sync: cuota.stripe_invoice_id ? "void_requested" : null
         };
@@ -835,7 +871,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
               <TextField label="Número de Identificación" fullWidth value={identificacion} onChange={(e) => setIdentificacion(e.target.value)} required />
             </Box>
 
-            {/* PREPARACIÓN HACIENDA COSTA RICA: Campos del perfil fiscal corporativo */}
+            {/* PREPARACIÓN HACIENDA COSTA RICA v4.4: Campos del perfil fiscal corporativo y alfanuméricos de 20 chars */}
             <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mb: 2.5 }}>
               <FormControl fullWidth>
                 <InputLabel>Tipo Cédula Fiscal (Hacienda CR)</InputLabel>
@@ -843,7 +879,14 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                   {FISCAL_ID_TYPES.map(f => <MenuItem key={f} value={f}>{f}</MenuItem>)}
                 </Select>
               </FormControl>
-              <TextField label="Número Identificación Fiscal" placeholder="Ej: 1-1234-1234" fullWidth value={cedulaFiscal} onChange={(e) => setCedulaFiscal(e.target.value)} />
+              <TextField 
+                label="Número Identificación Fiscal" 
+                placeholder="Ej: 1-1234-1234 o ID Extranjero alfanumérico" 
+                fullWidth 
+                slotProps={{ input: { maxLength: 20 } }} // Mandatorio v4.4
+                value={cedulaFiscal} 
+                onChange={(e) => setCedulaFiscal(e.target.value)} 
+              />
             </Box>
             
             <Box sx={{ mb: 2.5 }}>
@@ -1456,11 +1499,14 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
             onChange={e => setMontoAbonoCascada(e.target.value)} 
           />
 
+          {/* SELECTOR AMPLIADO BAJO REGLAS DE LA NOTA 6 - MINISTERIO DE HACIENDA v4.4 */}
           <FormControl fullWidth>
             <InputLabel>Forma de Pago Recibida</InputLabel>
             <Select value={metodoPagoManual} label="Forma de Pago Recibida" onChange={e => setMetodoPagoManual(e.target.value)}>
               <MenuItem value="Transferencia Bancaria">Transferencia Bancaria (Depósito)</MenuItem>
               <MenuItem value="Efectivo">Efectivo / Caja Física</MenuItem>
+              <MenuItem value="SINPE MOVIL">SINPE MÓVIL (Código 06)</MenuItem> 
+              <MenuItem value="Plataforma Digital">Plataforma Digital (Código 07)</MenuItem> 
             </Select>
           </FormControl>
 
