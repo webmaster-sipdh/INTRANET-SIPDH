@@ -203,10 +203,11 @@ exports.nightlyBillingCron = onSchedule({
   }
 
   try {
-    // MODIFICACIÓN CLAVE: Buscamos cuotas pendientes cuyo vencimiento sea en 3 días exactos
+    // BUSCA TODO LO QUE VENZA DESDE HOY HASTA LOS PRÓXIMOS 7 DÍAS 
+    // (Así captura cuotas de hoy, de mañana o deudas rezagadas sin procesar)
     const snapshotCuotas = await db.collectionGroup('plan_pagos')
       .where('estado', '==', 'pendiente')
-      .where('fecha_vencimiento', '==', targetFechaVencimientoCR)
+      .where('fecha_vencimiento', '<=', targetFechaVencimientoCR)
       .get();
 
     if (snapshotCuotas.empty) {
@@ -219,6 +220,10 @@ exports.nightlyBillingCron = onSchedule({
     for (const docCuota of snapshotCuotas.docs) {
       const cuotaData = docCuota.data();
       const cuotaRef = docCuota.ref;
+      // ESCUDO: Si ya se le generó una factura de Stripe antes, la saltamos para evitar duplicados
+      if (cuotaData.stripe_invoice_id) {
+        continue;
+      }
 
       const pathParts = cuotaRef.path.split('/');
       const casoId = pathParts[1];
