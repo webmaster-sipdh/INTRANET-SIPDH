@@ -176,7 +176,7 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
 });
 
 // =====================================================================================
-// MOTOR CRON: Tarea programada nocturna v2 con cálculo dinámico de vencimiento real
+// MOTOR CRON: Tarea programada nocturna v2 con desglose inteligente de IVA y Neto
 // =====================================================================================
 exports.nightlyBillingCron = onSchedule({
   schedule: '0 0 * * *', 
@@ -290,11 +290,7 @@ exports.nightlyBillingCron = onSchedule({
 
         const monedaFormateada = (cuotaData.moneda || 'usd').toLowerCase();
 
-        // RESPALDO FINANCIERO: Si monto_total es cero o no existe, toma el monto_neto del pago arbitrario
-        const montoFinal = cuotaData.monto_total || cuotaData.monto_neto || 0;
-        const unidadesMoneda = obtenerUnidadesStripe(montoFinal, monedaFormateada);
-
-        // --- ⚙️ ORDEN REORGANIZADO INTEGRAL PARA EVITAR FACTURAS EN $0.00 (RACE CONDITION) ---
+        // --- ⚙️ ORDEN REORGANIZADO INTEGRAL CON DESGLOSE DE LÍNEAS INDEPENDIENTES ---
 
         // Paso A: Crear primero el borrador de la factura vacía calculando sus días reales
         const invoice = await stripe.invoices.create({
@@ -305,17 +301,47 @@ exports.nightlyBillingCron = onSchedule({
           metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
         });
 
-        console.log(`[CRON] Inyectando hito financiero a Invoice ${invoice.id} por valor de: ${montoFinal} ${monedaFormateada.toUpperCase()} (Vence en ${diasParaVencer} días)`);
-        
-        // Paso B: Crear el hito amarrándolo DIRECTAMENTE al ID de la factura generada en el paso anterior
-        await stripe.invoiceItems.create({
-          customer: stripeCustomerId,
-          amount: unidadesMoneda,
-          currency: monedaFormateada,
-          description: cuotaData.concepto,
-          invoice: invoice.id, 
-          metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
-        });
+        console.log(`[CRON] Procesando desglose financiero para la Invoice ${invoice.id}.`);
+
+        // Paso B: Inyección modular de ítems amarrados directamente a la Factura
+        if (cuotaData.monto_neto && cuotaData.iva && cuotaData.iva > 0) {
+          
+          // Sub-item 1: Monto Neto Base
+          const unidadesNeto = obtenerUnidadesStripe(cuotaData.monto_neto, monedaFormateada);
+          await stripe.invoiceItems.create({
+            customer: stripeCustomerId,
+            amount: unidadesNeto,
+            currency: monedaFormateada,
+            description: `${cuotaData.concepto} (Monto Neto)`,
+            invoice: invoice.id, 
+            metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
+          });
+
+          // Sub-item 2: Impuesto al Valor Agregado (IVA)
+          const unidadesIva = obtenerUnidadesStripe(cuotaData.iva, monedaFormateada);
+          await stripe.invoiceItems.create({
+            customer: stripeCustomerId,
+            amount: unidadesIva,
+            currency: monedaFormateada,
+            description: `IVA (13%) - Costa Rica`,
+            invoice: invoice.id, 
+            metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
+          });
+
+        } else {
+          // 🛡️ RESPALDO: Si no viene un desglose limpio, se emite una sola línea consolidada
+          const montoFinal = cuotaData.monto_total || cuotaData.monto_neto || 0;
+          const unidadesMoneda = obtenerUnidadesStripe(montoFinal, monedaFormateada);
+
+          await stripe.invoiceItems.create({
+            customer: stripeCustomerId,
+            amount: unidadesMoneda,
+            currency: monedaFormateada,
+            description: cuotaData.concepto,
+            invoice: invoice.id, 
+            metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
+          });
+        }
 
         // Paso C: Finalizar y emitir la factura que ya tiene el dinero cargado con total garantía
         const finalizedInvoice = await stripe.invoices.sendInvoice(invoice.id);
