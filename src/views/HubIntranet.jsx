@@ -87,7 +87,7 @@ export default function HubIntranet({ setView, userRole }) {
               fullWidth 
               disabled={!tieneAccesoWeb}
               // Abre de forma segura el portal externo en una pestaña nueva para no sacar al usuario de la Intranet
-              onClick={() => window.open('https://iiresodh-web.web.app/admin', '_blank', 'noopener,noreferrer')} 
+              onClick={() => window.open('https://sipdh.com/admin', '_blank', 'noopener,noreferrer')} 
               sx={{ 
                 textTransform: 'none', 
                 fontWeight: 'bold', 
@@ -101,33 +101,6 @@ export default function HubIntranet({ setView, userRole }) {
           </CardContent>
         </Card>
 
-        {/* MÓDULO 3: RECURSOS HUMANOS (ESTRUCTURA DE ESPERA) */}
-        <Card sx={{ borderRadius: 3, bgcolor: '#f8fafc', border: '1px dashed #cbd5e1', boxShadow: 'none' }}>
-          <CardContent sx={{ p: 3, textAlign: 'center', opacity: 0.6 }}>
-            <Users size={42} style={{ color: '#64748b', marginBottom: '16px' }} />
-            <Typography variant="h6" fontWeight="bold" gutterBottom>Recursos Humanos</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ minHeight: 48, mb: 2 }}>
-              Gestión de personal, marcas y perfiles de usuario.
-            </Typography>
-            <Button variant="outlined" disabled fullWidth sx={{ textTransform: 'none', borderRadius: 2 }}>
-              Próximamente
-            </Button>
-          </CardContent>
-        </Card>
-
-        {/* MÓDULO 4: FINANZAS (ESTRUCTURA DE ESPERA) */}
-        <Card sx={{ borderRadius: 3, bgcolor: '#f8fafc', border: '1px dashed #cbd5e1', boxShadow: 'none' }}>
-          <CardContent sx={{ p: 3, textAlign: 'center', opacity: 0.6 }}>
-            <FileSpreadsheet size={42} style={{ color: '#64748b', marginBottom: '16px' }} />
-            <Typography variant="h6" fontWeight="bold" gutterBottom>Finanzas & Facturación</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ minHeight: 48, mb: 2 }}>
-              Conciliación de pasarelas de pago Stripe, facturación institucional y reportes analíticos.
-            </Typography>
-            <Button variant="outlined" disabled fullWidth sx={{ textTransform: 'none', borderRadius: 2 }}>
-              Próximamente
-            </Button>
-          </CardContent>
-        </Card>
       </Box>
 
       {/* ACCESOS DIRECTOS ADMINISTRATIVOS */}
