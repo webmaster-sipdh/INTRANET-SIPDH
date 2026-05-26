@@ -5,7 +5,7 @@ import {
   ListItem, ListItemButton, ListItemIcon, ListItemText, 
   IconButton, Avatar, Divider 
 } from '@mui/material';
-import { Briefcase, ShieldAlert, LogOut, UserCheck, Home } from 'lucide-react';
+import { Briefcase, ShieldAlert, LogOut, UserCheck, Home, Layers } from 'lucide-react';
 
 const drawerWidth = 260;
 
@@ -23,6 +23,8 @@ export default function Layout({ children, currentView, setView, userRole }) {
 
   if (userRole === 'Superadmin' || userRole === 'Admin') {
     menuItems.push({ text: 'Control de Usuarios', icon: <UserCheck size={20} />, id: 'usuarios' });
+    // REQUERIMIENTO COMPUESTO: Acceso seguro al Panel de Plantillas Generales Corporativas
+    menuItems.push({ text: 'Configuración de Planes', icon: <Layers size={20} />, id: 'config_planes' });
   }
 
   if (userRole === 'Superadmin') {
@@ -45,25 +47,25 @@ export default function Layout({ children, currentView, setView, userRole }) {
           {/* SECCIÓN IZQUIERDA: Alineación de activos de marca */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             
-            {/* 🚀 ISOTIPO: Reducción controlada de 512px a 36px manteniendo proporción 
+            {/* 🚀 ISOTIPO: Reducción de marca 
             <img 
               src="/Isotipo-w.png" 
               alt="Isotipo SIPDH" 
               style={{ 
                 height: '36px', 
-                width: 'auto', // Evita que el ancho se desfase de los 513px nativos
+                width: 'auto', 
                 objectFit: 'contain',
                 display: 'block'
               }} 
             /> */}
             
-            {/* 🚀 LOGO TEXTUAL: Reducción de 92px de alto a 26px para que calce en el Toolbar */}
+            {/* 🚀 LOGO TEXTUAL: Reducción de proporciones en Toolbar */}
             <img 
               src="/SIPDH-blanco.png" 
               alt="ISIPDH - Intranet" 
               style={{ 
                 height: '26px', 
-                width: 'auto', // Calcula el ancho proporcional a ~85px de forma automática
+                width: 'auto', 
                 objectFit: 'contain',
                 display: 'block'
               }} 
@@ -136,6 +138,7 @@ export default function Layout({ children, currentView, setView, userRole }) {
                       <ListItemIcon sx={{ color: currentView === item.id ? 'primary.main' : 'text.disabled', minWidth: 40 }}>
                         {item.icon}
                       </ListItemIcon>
+                      <ListItemTemplate text={item.text} currentView={currentView} item={item} />
                       <ListItemText 
                         primary={item.text} 
                         primaryTypographyProps={{ 

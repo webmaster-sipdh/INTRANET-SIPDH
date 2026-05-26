@@ -10,6 +10,7 @@ import Layout from './components/Layout';
 import HubIntranet from './views/HubIntranet'; 
 import UsuariosAutorizados from './views/UsuariosAutorizados';
 import LogsAuditoria from './views/LogsAuditoria';
+import ConfigPlanes from './views/ConfigPlanes'; // REQUERIMIENTO COMPUESTO: Importación del nuevo panel de plantillas
 
 // Vistas del Módulo de Litigio
 import Casos from './views/litigio/Casos';
@@ -126,6 +127,10 @@ function App() {
       if (view === 'logs' && userRole !== 'Superadmin') {
         setView('hub');
       }
+      // BLINDAJE DE VISTA: Protección perimetral para el panel de configuración de planes generales
+      if (view === 'config_planes' && userRole !== 'Superadmin' && userRole !== 'Admin') {
+        setView('hub');
+      }
       // 🚀 BLINDAJE DE SEGURIDAD: Un invitado no puede entrar a la fuerza a los casos
       if ((view === 'casos' || view === 'detalle_caso') && userRole === 'Invitado') {
         setView('hub');
@@ -157,6 +162,9 @@ function App() {
   if (vistaSegura === 'logs' && userRole !== 'Superadmin') {
     vistaSegura = 'hub';
   }
+  if (vistaSegura === 'config_planes' && userRole !== 'Superadmin' && userRole !== 'Admin') {
+    vistaSegura = 'hub';
+  }
   if ((vistaSegura === 'casos' || vistaSegura === 'detalle_caso') && userRole === 'Invitado') {
     vistaSegura = 'hub';
   }
@@ -182,6 +190,11 @@ function App() {
 
       {vistaSegura === 'logs' && (
         <LogsAuditoria currentUserEmail={user.email} userRole={userRole} />
+      )}
+
+      {/* RENDERIZADO SEGURO DE LA NUEVA VISTA ADMINISTRATIVA DE PLANTILLAS */}
+      {vistaSegura === 'config_planes' && (
+        <ConfigPlanes currentUserEmail={user.email} userRole={userRole} />
       )}
     </Layout>
   );
