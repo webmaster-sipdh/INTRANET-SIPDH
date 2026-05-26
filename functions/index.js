@@ -262,7 +262,11 @@ exports.nightlyBillingCron = onSchedule({
         }
 
         const monedaFormateada = (cuotaData.moneda || 'usd').toLowerCase();
-        const unidadesMoneda = obtenerUnidadesStripe(cuotaData.monto_total, monedaFormateada);
+
+        // RESPALDO: Si monto_total es cero o no existe, toma el monto_neto del pago arbitrario
+        const montoFinal = cuotaData.monto_total || cuotaData.monto_neto || 0;
+
+        const unidadesMoneda = obtenerUnidadesStripe(montoFinal, monedaFormateada);
 
         console.log(`[CRON] Fijando hito financiero en Stripe por valor de: ${cuotaData.monto_total} ${monedaFormateada.toUpperCase()}`);
         await stripe.invoiceItems.create({
