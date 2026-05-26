@@ -7,13 +7,14 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 // =====================================================================================
-// INICIALIZACIÓN DE STRIPE Y MÓDULOS MODERNOS V2 (Compatibles con v7)
+// INICIALIZACIÓN DE STRIPE Y MÓDULOS MODERNOS V2 EXIGIDOS POR v7
 // =====================================================================================
 const stripeSecret = process.env.STRIPE_SECRET_KEY || 'sk_placeholder_for_deployment_analysis';
 const stripe = require('stripe')(stripeSecret);
 
-// Importación modular del planificador v2 exigido por firebase-functions v7
+// Importaciones modulares de segunda generación (v2)
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onDocumentUpdated } = require("firebase-functions/v2/firestore"); // CORRECCIÓN DEFINITIVA
 
 /**
  * UTILERÍA AUXILIAR: Formatea montos según las reglas de Stripe.
@@ -165,10 +166,10 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
 });
 
 // =====================================================================================
-// CORRECCIÓN MODULAR: Tarea programada nocturna v2 exigida por firebase-functions v7
+// MOTOR CRON: Tarea programada nocturna v2 exigida por firebase-functions v7
 // =====================================================================================
 exports.nightlyBillingCron = onSchedule({
-  schedule: '0 0 * * *', // Cada medianoche
+  schedule: '0 0 * * *', 
   timeZone: 'America/Costa_Rica'
 }, async (event) => {
   const hoyCR = obtenerFechaActualCR();
@@ -254,21 +255,21 @@ exports.nightlyBillingCron = onSchedule({
           stripe_invoice_url: finalizedInvoice.hosted_invoice_url,
           metodo_pago: 'stripe',
           fecha_cobro_disparado: new Date().toISOString()
-          });
+        });
 
-          console.log(`[CRON SUCCESS] Cobro electrónico enviado con éxito a: ${emailCliente} | Invoice ID: ${finalizedInvoice.id}`);
+        console.log(`[CRON SUCCESS] Cobro electrónico enviado con éxito a: ${emailCliente} | Invoice ID: ${finalizedInvoice.id}`);
 
-        } catch (stripeErr) {
-          console.error(`[CRON STRIPE ERROR] Error procesando pasarela para la cuota ${cuotaRef.path}:`, stripeErr);
-        }
+      } catch (stripeErr) {
+        console.error(`[CRON STRIPE ERROR] Error procesando pasarela para la cuota ${cuotaRef.path}:`, stripeErr);
       }
-
-    } catch (globalErr) {
-      console.error(`[CRON CRITICAL ERROR] Detención inesperada de la tarea programada masiva:`, globalErr);
     }
 
-    return null;
-  });
+  } catch (globalErr) {
+    console.error(`[CRON CRITICAL ERROR] Detención inesperada de la tarea programada masiva:`, globalErr);
+  }
+
+  return null;
+});
 
 // =====================================================================================
 // WEBHOOK RECEPTOR: Captura y conciliación automática de pagos en línea
@@ -346,13 +347,14 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
 });
 
 // =====================================================================================
-// TRIGGER BASE DE DATOS: Cancelación / Void externa en Stripe ante Recaudación Manual
+// CORRECCIÓN MODULAR: Trigger de Firestore v2 (onDocumentUpdated) compatible con v7
 // =====================================================================================
-exports.syncStripeInvoiceStatus = functions.firestore
-  .document('casos/{casoId}/clientes/{clienteId}/plan_pagos/{cuotaId}')
-  .onUpdate(async (change, context) => {
-    const dataNueva = change.after.data();
-    const cuotaRef = change.after.ref;
+exports.syncStripeInvoiceStatus = onDocumentUpdated(
+  'casos/{casoId}/clientes/{clienteId}/plan_pagos/{cuotaId}', 
+  async (event) => {
+    // En v2, los datos anterior y nuevo se extraen desde event.data
+    const dataNueva = event.data.after.data();
+    const cuotaRef = event.data.after.ref;
 
     if (dataNueva.stripe_status_sync === 'void_requested' && dataNueva.stripe_invoice_id) {
       console.log(`[DB TRIGGER] Detectada solicitud de cancelación externa para la Invoice de Stripe: ${dataNueva.stripe_invoice_id}`);
@@ -383,4 +385,5 @@ exports.syncStripeInvoiceStatus = functions.firestore
     }
 
     return null;
-  });
+  }
+);
