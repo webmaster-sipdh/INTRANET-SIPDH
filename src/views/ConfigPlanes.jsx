@@ -28,7 +28,8 @@ import {
   IconButton, 
   Chip, 
   Alert, 
-  Divider 
+  Divider,
+  CircularProgress // CORRECCIÓN: Importación del componente de carga omitido
 } from '@mui/material';
 import { Plus, Trash2, Layers, FileText } from 'lucide-react';
 import { registrarLogAuditoria } from '../utils/auditLogger';
