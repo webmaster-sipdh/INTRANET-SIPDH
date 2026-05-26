@@ -93,7 +93,7 @@ const COUNTRIES = [
   { code: 'BO', name: 'Bolivia', phone: '+591' },
   { code: 'CA', name: 'Canadá', phone: '+1' },
   { code: 'GB', name: 'Reino Unido', phone: '+44' },
-  { code: 'FR', name: 'Francia', phone: '#33' },
+  { code: 'FR', name: 'Francia', phone: '+33' },
   { code: 'DE', name: 'Alemania', phone: '+49' },
   { code: 'IT', name: 'Italia', phone: '+39' }
 ];
@@ -206,22 +206,21 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
   const [historialComunicados, setHistorialComunicados] = useState([]);
   const [loadingHistorial, setLoadingHistorial] = useState(false);
 
-  // ESTADOS DE CONTROL FINANCIERO CON FLEXIBILIDAD DE FECHAS
+  // ESTADOS DE CONTROL FINANCIERO CON FLEXIBILIDAD DE FECHAS TOTALES
   const [planPagos, setPlanPagos] = useState([]);
   const [openCuotaModal, setOpenCuotaModal] = useState(false);
   const [openPagoManualModal, setOpenPagoManualModal] = useState(false);
   
-  // Asistente de Proyección Dinámica
-  const [faseModal, setFaseModal] = useState(1); // 1: Configuración base, 2: Ajuste de plazos libres
+  // Asistente de Proyección Dinámica sin Frecuencias Predefinidas
+  const [faseModal, setFaseModal] = useState(1); // 1: Configuración base, 2: Calendario Libre
   const [tipoEstructura, setTipoEstructura] = useState('plan'); 
   const [conceptoCuota, setConceptoCuota] = useState('');
   const [montoNetoCuota, setMontoNetoCuota] = useState(''); 
   const [fechaVencimientoCuota, setFechaVencimientoCuota] = useState(''); 
   const [cantidadCuotas, setCantidadCuotas] = useState('4'); 
-  const [frecuenciaPlan, setFrecuenciaPlan] = useState('mensual'); 
   const [metodoCobroCuota, setMetodoCobroCuota] = useState('stripe');
   
-  // Colección de cuotas en memoria para edición libre antes de guardar en Firestore
+  // Lista de cuotas temporales en memoria para ajustar plazos a mano
   const [cuotasProyectadas, setCuotasProyectadas] = useState([]);
 
   // Campos formulario de Registro Posterior de Pagos Hechos (Conciliación)
@@ -434,45 +433,30 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     }
   };
 
-  // ALGORITMO PREDICTIVO DE APERTURA: Proyecta la lista base en memoria para habilitar edición libre posterior
+  // PROYECTOR COMPUESTO PURO: Inicializa las filas vacías para obligar al ingreso manual de plazos libres
   const ejecutarAvanzaProyeccionDePlazos = () => {
-    if (!conceptoCuota.trim() || !montoNetoCuota || !fechaVencimientoCuota) return;
+    if (!conceptoCuota.trim() || !montoNetoCuota) return;
 
     const numCuotas = parseInt(cantidadCuotas) || 1;
-    let fechaBase = new Date(fechaVencimientoCuota + 'T00:00:00');
     const listaTemporal = [];
 
     for (let i = 1; i <= numCuotas; i++) {
-      if (i > 1) {
-        if (frecuenciaPlan === 'mensual') {
-          fechaBase.setMonth(fechaBase.getMonth() + 1);
-        } else if (frecuenciaPlan === 'quincenal') {
-          fechaBase.setDate(fechaBase.getDate() + 15);
-        }
-      }
-
-      const yyyy = fechaBase.getFullYear();
-      const mm = String(fechaBase.getMonth() + 1).padStart(2, '0');
-      const dd = String(fechaBase.getDate()).padStart(2, '0');
-      const fechaString = `${yyyy}-${mm}-${dd}`;
-
       listaTemporal.push({
         idTemp: 'temp_' + i + '_' + Date.now(),
         concepto: `Cuota ${i}/${numCuotas} - ${conceptoCuota.trim()}`,
         monto_neto: parseFloat(montoNetoCuota),
-        fecha_vencimiento: fechaString
+        fecha_vencimiento: '' // Forzamos el campo vacío para obligar a definir la fecha a mano
       });
     }
 
     setCuotasProyectadas(listaTemporal);
-    setFaseModal(2); // Desborda hacia la vista impositiva de edición libre
+    setFaseModal(2); // Desborda a la pantalla de plazos personalizados
   };
 
-  // ENVÍO DE DATOS CRUCIAL: Consolida y persiste de forma inmutable el plan en Firestore
+  // ENVÍO DE DATOS CONTABLE: Consolida y persiste de forma inmutable el plan en Firestore
   const handleCrearCuotaEstructurada = async (e) => {
     e.preventDefault();
 
-    // Si el usuario está en el Paso 1 de un plan compuesto, procesamos la proyeccion antes de guardar
     if (tipoEstructura === 'plan' && faseModal === 1) {
       ejecutarAvanzaProyeccionDePlazos();
       return;
@@ -509,7 +493,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           `Se proyectó cuota individual adeudada de honorarios por $${total.toFixed(2)} para ${apellidos}, ${nombres}`
         );
       } else {
-        // PERSISTENCIA DEL PASO 2: Guarda las cuotas con las fechas y plazos modificados a mano por el abogado
+        // PERSISTENCIA DEL PASO 2: Guarda cada cuota con la fecha libre que el abogado digitó
         for (const item of cuotasProyectadas) {
           const neto = parseFloat(item.monto_neto) || 0;
           const ivaCalculado = neto * 0.13;
@@ -520,7 +504,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
             monto_neto: neto,
             iva: ivaCalculado,
             monto_total: total,
-            fecha_vencimiento: item.fecha_vencimiento, // Guardado con el plazo personalizado libre
+            fecha_vencimiento: item.fecha_vencimiento, // Plazo 100% libre e independiente
             estado: 'pendiente',
             metodo_pago: metodoCobroCuota,
             stripe_invoice_id: null,
@@ -538,14 +522,12 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         );
       }
 
-      // Reiniciar flujos del wizard
       setConceptoCuota('');
       setMontoNetoCuota('');
       setFechaVencimientoCuota('');
       setMetodoCobroCuota('stripe');
       setTipoEstructura('plan');
       setCantidadCuotas('4');
-      setFrecuenciaPlan('mensual');
       setCuotasProyectadas([]);
       setFaseModal(1);
       setOpenCuotaModal(false);
@@ -555,7 +537,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     }
   };
 
-  // ACCIÓN POSTERIOR DE CONCILIACIÓN: Registra un pago hecho sobre una cuota preexistente del plan
+  // ACCIÓN POSTERIOR DE CONCILIACIÓN: Anota un pago hecho de forma manual
   const handleProcesarLiquidacionManual = async (e) => {
     e.preventDefault();
     if (!cuotaSeleccionadaParaPagar) return;
@@ -825,7 +807,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                           </Typography>
                         </Box>
 
-                        {/* ACCIÓN DE REGISTRO POSTERIOR: Solo se habilita si la cuota del plan está pendiente */}
+                        {/* ACCIÓN DE REGISTRO POSTERIOR: Anotación manual de recaudaciones bancarias/efectivo */}
                         {cuota.estado === 'pendiente' ? (
                           <Button
                             size="small"
@@ -938,7 +920,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         </Box>
       </Box>
 
-      {/* MODAL ASISTENTE DINÁMICO: CONFIGURADOR DE DEUDA CON PLAZOS Y VENCIMIENTOS TOTALMENTE LIBRES */}
+      {/* MODAL WIZARD: SECCIÓN PURA DE CREACIÓN Y ESTRUCTURACIÓN DE PLANES DE DEUDA LIBRE */}
       <Dialog
         open={openCuotaModal}
         onClose={() => {
@@ -959,11 +941,11 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         }}
       >
         <DialogTitle fontWeight="bold">
-          {faseModal === 1 ? 'Establecer Plan de Pagos' : 'Personalizar Plazos y Vencimientos'}
+          {faseModal === 1 ? 'Establecer Plan de Pagos' : 'Definir Fechas y Plazos del Plan'}
         </DialogTitle>
         <DialogContent dividers>
           
-          {/* FASE 1: PARAMETRIZACIÓN BASE SUCINTA */}
+          {/* PASO 1: PARÁMETROS BASE MACRO */}
           {faseModal === 1 && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
               <FormControl fullWidth>
@@ -973,7 +955,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                   label="Estructura Financiera del Plan" 
                   onChange={e => setTipoEstructura(e.target.value)}
                 >
-                  <MenuItem value="plan">Dividir en Múltiples Cuotas Sucesivas (Plan de Pagos)</MenuItem>
+                  <MenuItem value="plan">Dividir en Múltiples Cuotas Proyectadas</MenuItem>
                   <MenuItem value="unica">Registrar una Sola Cuota Aislada</MenuItem>
                 </Select>
               </FormControl>
@@ -989,7 +971,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
               />
 
               <TextField 
-                label={tipoEstructura === 'unica' ? "Monto Neto de la Cuota (USD)" : "Monto Neto por Cuota Individual (USD)"}
+                label={tipoEstructura === 'unica' ? "Monto Neto de la Cuota (USD)" : "Monto Neto por Cuota (USD)"}
                 type="number" 
                 fullWidth 
                 required 
@@ -999,27 +981,14 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
               />
 
               {tipoEstructura === 'plan' && (
-                <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
-                  <TextField 
-                    label="Cantidad Total de Pagos" 
-                    type="number" 
-                    fullWidth 
-                    required 
-                    value={cantidadCuotas} 
-                    onChange={e => setCantidadCuotas(e.target.value)} 
-                  />
-                  <FormControl fullWidth>
-                    <InputLabel>Sugerencia de Intervalo</InputLabel>
-                    <Select 
-                      value={frecuenciaPlan} 
-                      label="Sugerencia de Intervalo" 
-                      onChange={e => setFrecuenciaPlan(e.target.value)}
-                    >
-                      <MenuItem value="mensual">Mensual (Propuesta base)</MenuItem>
-                      <MenuItem value="quincenal">Quincenal (Propuesta base)</MenuItem>
-                    </Select>
-                  </FormControl>
-                </Box>
+                <TextField 
+                  label="¿En cuántos pagos desea dividirlo?" 
+                  type="number" 
+                  fullWidth 
+                  required 
+                  value={cantidadCuotas} 
+                  onChange={e => setCantidadCuotas(e.target.value)} 
+                />
               )}
               
               {montoNetoCuota && !isNaN(parseFloat(montoNetoCuota)) && (
@@ -1044,15 +1013,17 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                 </Box>
               )}
 
-              <TextField 
-                label={tipoEstructura === 'unica' ? "Fecha de Vencimiento" : "Vencimiento Base del Pago Inicial"} 
-                type="date" 
-                fullWidth 
-                required 
-                slotProps={{ inputLabel: { shrink: true } }} 
-                value={fechaVencimientoCuota} 
-                onChange={e => setFechaVencimientoCuota(e.target.value)} 
-              />
+              {tipoEstructura === 'unica' && (
+                <TextField 
+                  label="Fecha de Vencimiento" 
+                  type="date" 
+                  fullWidth 
+                  required 
+                  slotProps={{ inputLabel: { shrink: true } }} 
+                  value={fechaVencimientoCuota} 
+                  onChange={e => setFechaVencimientoCuota(e.target.value)} 
+                />
+              )}
 
               <FormControl fullWidth>
                 <InputLabel>Canal Planificado de Alerta / Cobro</InputLabel>
@@ -1068,11 +1039,11 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
             </Box>
           )}
 
-          {/* FASE 2: EDICIÓN LIBRE TOTAL DE VENCIMIENTOS (FLEXIBILIDAD SIN RELACIÓN CRONOLÓGICA) */}
+          {/* PASO 2: LIBERTAD TOTAL DE PLAZOS (FECHAS TOTALMENTE EN BLANCO PARA RELLENAR A MANO SIN INTERVALOS FIJOS) */}
           {tipoEstructura === 'plan' && faseModal === 2 && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: '420px', overflowY: 'auto', pt: 1 }}>
               <Alert severity="info" sx={{ borderRadius: 2, fontSize: '0.8rem', py: 0.5, mb: 1 }}>
-                Modifique libremente la fecha, concepto o monto neto de cada cuota. No requieren guardar relación fija.
+                Asigne la fecha exacta de vencimiento para cada pago individual. No requieren seguir ningún patrón fijo.
               </Alert>
               {cuotasProyectadas.map((item, idx) => (
                 <Box 
@@ -1088,12 +1059,12 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                   }}
                 >
                   <Typography variant="caption" fontWeight="bold" color="primary.main">
-                    PARÁMETROS DE LA CUOTA {idx + 1}
+                    VENCIMIENTO DE LA CUOTA {idx + 1}
                   </Typography>
                   
                   <TextField
                     size="small"
-                    label="Concepto específico"
+                    label="Concepto de la cuota"
                     fullWidth
                     required
                     value={item.concepto}
@@ -1119,7 +1090,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                     />
                     <TextField
                       size="small"
-                      label="Plazo / Vencimiento"
+                      label="Fecha Límite"
                       type="date"
                       required
                       slotProps={{ inputLabel: { shrink: true } }}
@@ -1131,7 +1102,6 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                       }}
                     />
                   </Box>
-
                   <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right', display: 'block', mt: -0.5, fontSize: '0.68rem' }}>
                     IVA 13%: ${(item.monto_neto * 0.13).toFixed(2)} | Total: ${(item.monto_neto * 1.13).toFixed(2)}
                   </Typography>
@@ -1165,7 +1135,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           <Button type="submit" variant="contained" sx={{ textTransform: 'none', fontWeight: 'bold' }}>
             {tipoEstructura === 'unica' 
               ? 'Guardar Cuota' 
-              : (faseModal === 1 ? 'Siguiente: Ajustar Vencimientos' : 'Confirmar Calendario Completo')}
+              : (faseModal === 1 ? 'Siguiente: Definir Fechas' : 'Confirmar Calendario Completo')}
           </Button>
         </DialogActions>
       </Dialog>
