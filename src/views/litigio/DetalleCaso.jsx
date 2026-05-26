@@ -572,7 +572,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
 
           await registrarLogAuditoria(
             currentUserEmail,
-            'Resolución de Plazo',
+            'Refutación de Plazo',
             `Se solventó plazo ID: ${plazoAActivar.id} subiendo documento probatorio: "${fileProbatorio.name}"`
           );
 
@@ -818,7 +818,8 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         desgloseFinancieroMensual[periodo].efectivo += cuota.monto_total || 0;
       }
     } else if (cuota.estado === 'pendiente') {
-      totalPendienteCobroGlobal += cuota.monto_total || 0;
+      // Tomamos en consideración los saldos pendientes granulares de pagos parciales
+      totalPendienteCobroGlobal += cuota.saldo_pendiente !== undefined ? cuota.saldo_pendiente : cuota.monto_total;
     }
   });
 
@@ -831,7 +832,8 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         casoId={caso.id} 
         clienteId={clienteSeleccionadoId} 
         onVolver={() => setClienteSeleccionadoId(null)} 
-        currentUserEmail={currentUserEmail} 
+        currentUserEmail={currentUserEmail}
+        userRole={userRole} // INYECCIÓN ESTRUCTURAL DE SEGURIDAD RBAC COMPLETA
       />
     );
   }
@@ -956,7 +958,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                       </TableCell>
                       <TableCell>
                         <Chip 
-                          label={clienteItem.estado_pago} 
+                          label={clienteItem.estado_pago || 'Pendiente'} 
                           size="small" 
                           color={clienteItem.estado_pago === 'Pagado' ? 'success' : 'warning'} 
                           sx={{ fontWeight: 'bold' }} 
@@ -1090,7 +1092,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
             {/* 1. SECCIÓN SUPERIOR DE INDICADORES MACRO (KPI CARDS) */}
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
               <Paper sx={{ p: 2.5, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
-                <Typography variant="caption" fontWeight="bold" color="text.secondary" display="block" uppercase>
+                <Typography variant="caption" fontWeight="bold" color="text.secondary" display="block">
                   Base Imponible Recaudada
                 </Typography>
                 <Typography variant="h5" fontWeight="bold" sx={{ mt: 1, color: 'text.primary' }}>
@@ -1178,7 +1180,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
 
               {todasLasCuotas.length === 0 ? (
                 <Alert severity="info" sx={{ borderRadius: 2 }}>
-                  Este litigio no reporta ninguna cuota estructurada hasta la fecha.
+                  Este litigio no reporta ninguna cuota structured hasta la fecha.
                 </Alert>
               ) : (
                 <TableContainer component={Paper} sx={{ boxShadow: 'none', border: '1px solid #e2e8f0', borderRadius: 2 }}>
@@ -1211,12 +1213,20 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                                 sx={{ fontWeight: 'bold', fontSize: '0.65rem', height: 18 }}
                               />
                             </TableCell>
-                            <TableCell sx={{ fontWeight: 'bold' }}>${cuota.monto_total.toFixed(2)}</TableCell>
+                            <TableCell sx={{ fontWeight: 'bold' }}>
+                              {cuota.moneda === 'crc' ? '¢' : '$'}
+                              {cuota.monto_total.toFixed(2)}
+                              {cuota.saldo_pendiente > 0 && (
+                                <Typography variant="caption" display="block" color="error.main" sx={{ fontSize: '0.65rem', fontWeight: 'bold' }}>
+                                  (Pendiente: {cuota.moneda === 'crc' ? '¢' : '$'}{cuota.saldo_pendiente.toFixed(2)})
+                                </Typography>
+                              )}
+                            </TableCell>
                             <TableCell>
                               <Typography variant="caption" display="block" sx={{ lineHeight: 1 }}>
                                 {cuota.estado === 'pagada' 
                                   ? (cuota.metodo_pago === 'stripe' ? '💳 Stripe Invoice' : `📁 Manual (${cuota.metodo_pago})`)
-                                  : `⏰ Programado (${cuota.metodo_pago})`}
+                                  : `⏰ Programado (${cuota.metodo_pago || 'Stripe'})`}
                               </Typography>
                               {cuota.comprobante_referencia && (
                                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.62rem', fontStyle: 'italic' }}>
@@ -1499,7 +1509,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         <DialogTitle fontWeight="bold">Metadatos del Documento Común</DialogTitle>
         <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           <Typography variant="body2" color="text.secondary">
-            Archivo detectado: <strong>{fileComunSeleccionado?.name}</strong>
+            Archivo Para Guardar: <strong>{fileComunSeleccionado?.name}</strong>
           </Typography>
           <TextField label="Descripción Material del Documento" autoFocus fullWidth required value={descripcionComun} onChange={e => setDescripcionComun(e.target.value)} />
           <TextField label="Fecha de Emisión del Documento" type="date" fullWidth required slotProps={{ inputLabel: { shrink: true } }} value={fechaDocumentoComun} onChange={e => setFechaDocumentoComun(e.target.value)} />

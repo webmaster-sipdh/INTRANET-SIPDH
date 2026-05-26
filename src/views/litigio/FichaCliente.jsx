@@ -59,7 +59,8 @@ import {
   CheckCircle,
   AlertTriangle,
   Mail,
-  Calendar
+  Calendar,
+  Edit3
 } from 'lucide-react';
 import { registrarLogAuditoria } from '../../utils/auditLogger';
 
@@ -70,6 +71,14 @@ const DOC_TYPES = [
   'RUT', 
   'Cédula de Residencia', 
   'Otro'
+];
+
+// REQUERIMIENTO FACTURACIÓN HACIENDA CR: Tipos de identificación fiscal autorizados
+const FISCAL_ID_TYPES = [
+  'Cédula Física',
+  'Cédula Jurídica',
+  'DIMEX',
+  'NITE'
 ];
 
 const COUNTRIES = [
@@ -99,7 +108,7 @@ const COUNTRIES = [
 ];
 
 // =====================================================================================
-// SUB-COMPONENTE ENCAPSULADO: Maneja el estado expandible/colapsable de forma individual
+// SUB-COMPONENTE ENCAPSULADO: Notificaciones
 // =====================================================================================
 function ItemNotificacion({ item }) {
   const [expanded, setExpanded] = useState(false);
@@ -176,7 +185,7 @@ function ItemNotificacion({ item }) {
   );
 }
 
-export default function FichaCliente({ casoId, clienteId, onVolver, currentUserEmail }) {
+export default function FichaCliente({ casoId, clienteId, onVolver, currentUserEmail, userRole }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -186,6 +195,11 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
   const [apellidos, setApellidos] = useState('');
   const [tipoIdentificacion, setTipoIdentificacion] = useState('Cédula de Identidad');
   const [identificacion, setIdentificacion] = useState('');
+  
+  // REQUERIMIENTO HACIENDA CR: Estados del perfil fiscal corporativo/personal
+  const [tipoCedulaFiscal, setTipoCedulaFiscal] = useState('Cédula Física');
+  const [cedulaFiscal, setCedulaFiscal] = useState('');
+
   const [pais, setPais] = useState('Costa Rica');
   const [direccion, setDireccion] = useState('');
 
@@ -202,46 +216,52 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  // Estados reactivos en tiempo real para telemetría
   const [historialComunicados, setHistorialComunicados] = useState([]);
   const [loadingHistorial, setLoadingHistorial] = useState(false);
 
-  // ESTADOS DE CONTROL FINANCIERO AVANZADO E HÍBRIDO
+  // CONTROL FINANCIERO COMPUESTO AVANZADO
   const [planPagos, setPlanPagos] = useState([]);
   const [openCuotaModal, setOpenCuotaModal] = useState(false);
   const [openPagoManualModal, setOpenPagoManualModal] = useState(false);
   
-  // Lista de Plantillas de Planes Generales cargadas desde Firestore
+  // MODALES EXCLUSIVOS SUPERADMIN/ADMIN: Edición y Trazabilidad local
+  const [openEditarCuotaModal, setOpenEditarCuotaModal] = useState(false);
+  const [cuotaAEditar, setCuotaAEditar] = useState(null);
+  const [editConcepto, setEditConcepto] = useState('');
+  const [editMontoNeto, setEditMontoNeto] = useState('');
+  const [editFechaVencimiento, setEditFechaVencimiento] = useState('');
+  const [editMotivoCambio, setEditMotivoCambio] = useState('');
+
   const [planesGeneralesLista, setPlanesGeneralesLista] = useState([]);
-  
-  // Estados de control del Asistente (Wizard) de Deudas
-  const [faseModal, setFaseModal] = useState(1); // Paso 1: Origen, Paso 2: Parametrización, Paso 3: Ajuste Fino
-  const [origenPlan, setOrigenPlan] = useState('personalizado'); // 'personalizado' o 'plantilla'
+  const [faseModal, setFaseModal] = useState(1); 
+  const [origenPlan, setOrigenPlan] = useState('personalizado'); 
   const [plantillaSeleccionada, setPlantillaSeleccionada] = useState(null);
 
-  // Campos de Configuración Base
+  // REQUERIMIENTO MULTIMONEDA: Soporte nativo USD y colones de Costa Rica
+  const [monedaPlan, setMonedaPlan] = useState('usd');
+
   const [conceptoCuota, setConceptoCuota] = useState('');
   const [montoNetoCuota, setMontoNetoCuota] = useState(''); 
   const [fechaVencimientoCuota, setFechaVencimientoCuota] = useState(''); 
   const [cantidadCuotas, setCantidadCuotas] = useState('4'); 
-  const [frecuenciaPlan, setFrecuenciaPlan] = useState('mensual'); // 'mensual', 'trimestral', 'semestral', 'arbitrario'
-  const [metodoCobroCuota, setMetodoCobroCuota] = useState('stripe');
+  const [frecuenciaPlan, setFrecuenciaPlan] = useState('mensual'); 
   
-  // Tabla interna en memoria para el Paso 3 (Ajuste Fino de montos y fechas)
   const [cuotasProyectadas, setCuotasProyectadas] = useState([]);
 
-  // Campos formulario de Registro Posterior de Pagos Hechos (Conciliación)
-  const [cuotaSeleccionadaParaPagar, setCuotaSeleccionadaParaPagar] = useState(null);
+  // Recaudación Abierta (Cascada)
+  const [montoAbonoCascada, setMontoAbonoCascada] = useState('');
   const [metodoPagoManual, setMetodoPagoManual] = useState('Transferencia Bancaria');
   const [referenciaManual, setReferenciaManual] = useState('');
+  const [permitirCondonacionAdministrativa, setPermitirCondonacionAdministrativa] = useState(false);
 
   const clienteRef = doc(db, 'casos', casoId, 'clientes', clienteId);
+
+  const esAdministrador = userRole === 'Superadmin' || userRole === 'Admin';
 
   useEffect(() => {
     setLoading(true);
     setError('');
 
-    // 1. Escuchador Live para los datos demográficos y de contacto de la Ficha
     const unsubCliente = onSnapshot(clienteRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
@@ -250,6 +270,8 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         setApellidos(data.apellidos || '');
         setTipoIdentificacion(data.tipo_identificacion || 'Cédula de Identidad');
         setIdentificacion(data.identificacion || ''); 
+        setTipoCedulaFiscal(data.tipo_cedula_fiscal || 'Cédula Física');
+        setCedulaFiscal(data.cedula_fiscal || '');
         setPais(data.pais || 'Costa Rica'); 
         setDireccion(data.direccion || '');
         setCorreoPrincipal(data.correo_principal || data.correo || ''); 
@@ -267,29 +289,22 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       setLoading(false);
     });
 
-    // 2. Escuchador Live para la Bitácora de Notas Jurídicas
     const unsubNotas = onSnapshot(query(collection(db, 'casos', casoId, 'clientes', clienteId, 'notas'), orderBy('fecha', 'desc')), (snap) => {
       setNotas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    // 3. Escuchador Live para la Carga Inmutable de Documentos y Poderes
-    const qDocs = query(collection(db, 'casos', casoId, 'clientes', clienteId, 'documentos'), orderBy('fecha_subida', 'desc'));
-    const unsubDocs = onSnapshot(qDocs, (snap) => {
+    const unsubDocs = onSnapshot(query(collection(db, 'casos', casoId, 'clientes', clienteId, 'documentos'), orderBy('fecha_subida', 'desc')), (snap) => {
       setDocumentos(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    // 4. Escuchador Live para el Plan de Pagos personalizado (Calendario de Deuda)
-    const qPagos = query(collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos'), orderBy('fecha_vencimiento', 'asc'));
-    const unsubPagos = onSnapshot(qPagos, (snap) => {
+    const unsubPagos = onSnapshot(query(collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos'), orderBy('fecha_vencimiento', 'asc')), (snap) => {
       setPlanPagos(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    // 5. Escuchador Live para la colección global de Planes Generales preestablecidos
     const unsubPlanesGenerales = onSnapshot(collection(db, 'planes_generales'), (snap) => {
       setPlanesGeneralesLista(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    // 6. Escuchador Live para la subcolección autónoma con los DATOS COMPLETOS del comunicado
     setLoadingHistorial(true);
     const historialRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'historial_comunicados');
     const unsubHistorial = onSnapshot(historialRef, (snapHistorial) => {
@@ -311,7 +326,6 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         } catch (e) { return 0; }
       };
 
-      // Ordenar de más nuevo a más viejo
       listaEventos.sort((a, b) => parseFechaCRAMilisegundos(b.ultima_actualizacion) - parseFechaCRAMilisegundos(a.ultima_actualizacion));
       setHistorialComunicados(listaEventos);
       setLoadingHistorial(false);
@@ -340,6 +354,8 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         apellidos: apellidos.trim(), 
         tipo_identificacion: tipoIdentificacion,
         identificacion: identificacion.trim(), 
+        tipo_cedula_fiscal: tipoCedulaFiscal,
+        cedula_fiscal: cedulaFiscal.trim(),
         pais: pais, 
         direccion: direccion.trim(), 
         correo_principal: correoPrincipal.trim(),
@@ -353,10 +369,10 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       await registrarLogAuditoria(
         currentUserEmail, 
         'Actualización de Cliente', 
-        `Se editaron los datos de contacto y demográficos del representado: ${apellidos.trim()}, ${nombres.trim()}`
+        `Se editaron los metadatos demográficos y el perfil fiscal de Hacienda para: ${apellidos.trim()}, ${nombres.trim()}`
       );
       
-      setSuccess('Expediente de contacto actualizado correctamente.');
+      setSuccess('Expediente fiscal y de contacto actualizado correctamente.');
     } catch (err) { 
       setError('No se pudieron guardar los cambios.'); 
     }
@@ -414,12 +430,6 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           fecha_subida: new Date().toISOString() 
         });
 
-        await registrarLogAuditoria(
-          currentUserEmail, 
-          'Carga de Poder/Doc', 
-          `Se cargó el archivo individual "${file.name}" en el expediente de: ${apellidos}, ${nombres}`
-        );
-
         setUploading(false); 
         setSuccess('Archivo enlazado con éxito.');
       }
@@ -433,26 +443,17 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         await deleteObject(ref(storage, storagePath));
       }
       await deleteDoc(doc(db, 'casos', casoId, 'clientes', clienteId, 'documentos', docId));
-
-      await registrarLogAuditoria(
-        currentUserEmail, 
-        'Eliminación de Poder/Doc', 
-        `Se eliminó el documento ID: ${docId} perteneciente a: ${apellidos}, ${nombres}`
-      );
-
       setSuccess('Documento removido correctamente.');
     } catch (err) { 
       setError('Error al eliminar archivo.'); 
     }
   };
 
-  // ASISTENTE DE PROYECCIÓN FINANCIERA: Transforma la regla seleccionada en renglones editables en memoria
   const generarBorradorDePlanYAvancePaso3 = () => {
     const listaTemporal = [];
     let fechaBase = fechaVencimientoCuota ? new Date(fechaVencimientoCuota + 'T00:00:00') : new Date();
 
     if (origenPlan === 'plantilla' && plantillaSeleccionada) {
-      // CARGAR DE PLAN GENERAL PREESTABLECIDO: Mapea los hitos relativos de la plantilla
       const cuotasPlantilla = plantillaSeleccionada.cuotas || [];
       cuotasPlantilla.forEach((cPlantilla, idx) => {
         let fechaCuota = new Date(fechaBase.getTime());
@@ -473,26 +474,20 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         });
       });
     } else {
-      // COMPORTAMIENTO DESDE CERO: Proyecta según la frecuencia elegida
       const numCuotas = parseInt(cantidadCuotas) || 1;
       const netoBase = parseFloat(montoNetoCuota) || 0;
 
       for (let i = 1; i <= numCuotas; i++) {
         if (i > 1) {
-          if (frecuenciaPlan === 'mensual') {
-            fechaBase.setMonth(fechaBase.getMonth() + 1);
-          } else if (frecuenciaPlan === 'trimestral') {
-            fechaBase.setMonth(fechaBase.getMonth() + 3);
-          } else if (frecuenciaPlan === 'semestral') {
-            fechaBase.setMonth(fechaBase.getMonth() + 6);
-          }
+          if (frecuenciaPlan === 'mensual') fechaBase.setMonth(fechaBase.getMonth() + 1);
+          else if (frecuenciaPlan === 'trimestral') fechaBase.setMonth(fechaBase.getMonth() + 3);
+          else if (frecuenciaPlan === 'semestral') fechaBase.setMonth(fechaBase.getMonth() + 6);
         }
 
         const yyyy = fechaBase.getFullYear();
         const mm = String(fechaBase.getMonth() + 1).padStart(2, '0');
         const dd = String(fechaBase.getDate()).padStart(2, '0');
         
-        // Si es arbitrario, las fechas nacen completamente vacías para rellenarse a mano
         const fechaString = frecuenciaPlan === 'arbitrario' ? '' : `${yyyy}-${mm}-${dd}`;
 
         listaTemporal.push({
@@ -505,22 +500,24 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     }
 
     setCuotasProyectadas(listaTemporal);
-    setFaseModal(3); // Salta directamente al tablero de ajuste fino
+    setFaseModal(3); 
   };
 
-  // PERSISTENCIA FINAL: Toma la bitácora personalizada del Paso 3 e inyecta la deuda en Firestore
   const handleCrearCuotaEstructurada = async (e) => {
     e.preventDefault();
+    if (faseModal < 3) {
+      generarBorradorDePlanYAvancePaso3();
+      return;
+    }
 
     setError('');
     setSuccess('');
     const planPagosRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos');
 
     try {
-      // Inyección granular inalterada en bucle de cada documento del plan personalizado
       for (const item of cuotasProyectadas) {
         const neto = parseFloat(item.monto_neto) || 0;
-        const ivaCalculado = neto * 0.13; // Cálculo estricto del 13% IVA Costa Rica
+        const ivaCalculado = neto * 0.13; 
         const total = neto + ivaCalculado;
 
         await addDoc(planPagosRef, {
@@ -528,29 +525,34 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           monto_neto: neto,
           iva: ivaCalculado,
           monto_total: total,
-          fecha_vencimiento: item.fecha_vencimiento, // Plazo e hito 100% libre e independiente
+          monto_pagado: 0,
+          saldo_pendiente: total,
+          fecha_vencimiento: item.fecha_vencimiento, 
           estado: 'pendiente',
-          metodo_pago: metodoCobroCuota,
+          metodo_pago: null,
+          moneda: monedaPlan, // REQUERIMIENTO MULTIMONEDA PERSISTIDO
           stripe_invoice_id: null,
           stripe_invoice_url: null,
           fecha_pago_realizado: null,
           registrado_por: null,
-          comprobante_referencia: ''
+          comprobante_referencia: '',
+          // PREPARACIÓN HACIENDA CR (Estructura interna oculta API Ready)
+          codigo_actividad: "691001",
+          impuesto_codigo: "01",
+          impuesto_tarifa: 13,
+          facturacion_electronica_ready: true
         });
       }
 
       await registrarLogAuditoria(
         currentUserEmail,
         'Establecimiento de Plan Financiero Avanzado',
-        `Se inyectó un calendario de ${cuotasProyectadas.length} cuotas personalizadas para ${apellidos}, ${nombres}`
+        `Se inyectó un calendario de ${cuotasProyectadas.length} cuotas personalizadas en moneda [${monedaPlan.toUpperCase()}]`
       );
 
-      // Resetear estados del Wizard completo
       setConceptoCuota('');
       setMontoNetoCuota('');
       setFechaVencimientoCuota('');
-      setMetodoCobroCuota('stripe');
-      setTipoEstructura('plan');
       setCantidadCuotas('4');
       setFrecuenciaPlan('mensual');
       setOrigenPlan('personalizado');
@@ -558,16 +560,19 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       setCuotasProyectadas([]);
       setFaseModal(1);
       setOpenCuotaModal(false);
-      setSuccess('Plan de cuotas y vencimientos establecido correctamente en el expediente.');
+      setSuccess('Plan de cuotas y vencimientos establecido correctamente.');
     } catch (err) {
-      setError('Error al registrar la estructura impositiva de cuotas en el servidor.');
+      setError('Error al registrar la estructura de cuotas en el servidor.');
     }
   };
 
-  // ACCIÓN POSTERIOR DE CONCILIACIÓN: Anota un pago hecho de forma manual
-  const handleProcesarLiquidacionManual = async (e) => {
+  // =====================================================================================
+  // ALGORITMO COMPUESTO SOBERANO: Motor de Cascada para Amortización Extraordinaria Abierta
+  // =====================================================================================
+  const handleProcesarLiquidacionCascada = async (e) => {
     e.preventDefault();
-    if (!cuotaSeleccionadaParaPagar) return;
+    let bolsaDinero = parseFloat(montoAbonoCascada);
+    if (!bolsaDinero || bolsaDinero <= 0) return;
 
     setError('');
     setSuccess('');
@@ -576,64 +581,207 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     const fechaCR = ahora.toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
     const periodoFiscal = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}`;
 
+    // Filtrar cuotas pendientes ordenadas estrictamente por vencimiento cronológico antiguo
+    const cuotasPendientesOrdenadas = planPagos
+      .filter(c => c.estado === 'pendiente')
+      .sort((a, b) => a.fecha_vencimiento.localeCompare(b.fecha_vencimiento));
+
+    if (cuotasPendientesOrdenadas.length === 0) {
+      setError('No existen obligaciones pendientes para amortizar en esta ficha.');
+      return;
+    }
+
     try {
-      const cuotaDocRef = doc(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuotaSeleccionadaParaPagar.id);
+      for (const cuota of cuotasPendientesOrdenadas) {
+        if (bolsaDinero <= 0) break;
+
+        const saldoExigibleActual = cuota.saldo_pendiente !== undefined ? cuota.saldo_pendiente : cuota.monto_total;
+        const cuotaDocRef = doc(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuota.id);
+
+        let abonoEfectivoParaEstaCuota = 0;
+        let nuevoEstado = 'pendiente';
+        let nuevoSaldoPendiente = saldoExigibleActual;
+        let nuevoMontoPagado = cuota.monto_pagado || 0;
+
+        if (bolsaDinero >= saldoExigibleActual) {
+          // Cubre la totalidad de la cuota o el remanente pendiente
+          abonoEfectivoParaEstaCuota = saldoExigibleActual;
+          bolsaDinero -= saldoExigibleActual;
+          nuevoEstado = 'pagada';
+          nuevoSaldoPendiente = 0;
+          nuevoMontoPagado = cuota.monto_total;
+        } else {
+          // Pago parcial: Agota el bote de dinero extraordinario
+          abonoEfectivoParaEstaCuota = bolsaDinero;
+          nuevoSaldoPendiente = saldoExigibleActual - bolsaDinero;
+          nuevoMontoPagado = (cuota.monto_pagado || 0) + bolsaDinero;
+          bolsaDinero = 0;
+          nuevoEstado = 'pendiente';
+        }
+
+        const mutacionCampos = {
+          estado: nuevoEstado,
+          saldo_pendiente: nuevoSaldoPendiente,
+          monto_pagado: nuevoMontoPagado,
+          fecha_pago_realizado: fechaCR,
+          periodo_fiscal: periodoFiscal,
+          registrado_por: currentUserEmail,
+          metodo_pago: metodoPagoManual === 'Efectivo' ? 'efectivo' : 'transferencia',
+          comprobante_referencia: referenciaManual.trim(),
+          // LIFECYCLE STRIPE SYNC: Al amortizar manualmente, forzamos bandera de void/cancelación externa
+          stripe_status_sync: cuota.stripe_invoice_id ? "void_requested" : null
+        };
+
+        await updateDoc(cuotaDocRef, mutacionCampos);
+
+        // BITÁCORA LOCAL ADJUNTA (Control de Fraude Interno en Ficha): Registro inmutable interno
+        const logInternoRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuota.id, 'historial_cambios');
+        await addDoc(logInternoRef, {
+          tipo_accion: 'abono_cascada',
+          monto_aplicado: abonoEfectivoParaEstaCuota,
+          saldo_restante_cuota: nuevoSaldoPendiente,
+          ejecutado_por: currentUserEmail,
+          fecha: fechaCR,
+          referencia: referenciaManual.trim()
+        });
+      }
+
+      await registrarLogAuditoria(
+        currentUserEmail,
+        'Recaudación Abierta en Cascada',
+        `Se procesó un abono extraordinario de $${parseFloat(montoAbonoCascada).toFixed(2)} diluyéndose en las cuotas más antiguas.`
+      );
+
+      setMontoAbonoCascada('');
+      setReferenciaManual('');
+      setOpenPagoManualModal(false);
+      setSuccess('Abono extraordinario procesado e impactado en cascada correctamente.');
+    } catch (err) {
+      setError('Error crítico ejecutando el bucle impositivo de cascada.');
+    }
+  };
+
+  // SUPERPODERES ADMINISTRATIVOS: Mutación granular controlada por Superadmin/Admin
+  const handleEjecutarEdicionAdministrativa = async (e) => {
+    e.preventDefault();
+    if (!cuotaAEditar || !editConcepto.trim() || !editMontoNeto || !editFechaVencimiento || !editMotivoCambio.trim()) return;
+
+    const nuevaBase = parseFloat(editMontoNeto);
+    const nuevoIva = nuevaBase * 0.13;
+    const nuevoTotal = nuevaBase + nuevoIva;
+
+    const ahora = new Date();
+    const fechaCR = ahora.toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
+
+    try {
+      const cuotaDocRef = doc(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuotaAEditar.id);
+      
+      const antesMetadatos = {
+        concepto: cuotaAEditar.concepto,
+        monto_neto: cuotaAEditar.monto_neto,
+        monto_total: cuotaAEditar.monto_total,
+        fecha_vencimiento: cuotaAEditar.fecha_vencimiento
+      };
+
       await updateDoc(cuotaDocRef, {
-        estado: 'pagada', 
-        fecha_pago_realizado: fechaCR,
-        periodo_fiscal: periodoFiscal, 
-        registrado_por: currentUserEmail,
-        metodo_pago: metodoPagoManual === 'Efectivo' ? 'efectivo' : 'transferencia',
-        comprobante_referencia: referenciaManual.trim() 
+        concepto: editConcepto.trim(),
+        monto_neto: nuevaBase,
+        iva: nuevoIva,
+        monto_total: nuevoTotal,
+        saldo_pendiente: cuotaAEditar.estado === 'pagada' ? 0 : nuevoTotal - (cuotaAEditar.monto_pagado || 0),
+        fecha_vencimiento: editFechaVencimiento
+      });
+
+      // BITÁCORA LOCAL DE CONTROL INTERNO ANTI-FRAUDE
+      const logInternoRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuotaAEditar.id, 'historial_cambios');
+      await addDoc(logInternoRef, {
+        tipo_accion: 'modificacion_administrativa',
+        ejecutado_por: currentUserEmail,
+        fecha: fechaCR,
+        motivo: editMotivoCambio.trim(),
+        antes: antesMetadatos,
+        despues: {
+          concepto: editConcepto.trim(),
+          monto_neto: nuevaBase,
+          monto_total: nuevoTotal,
+          fecha_vencimiento: editFechaVencimiento
+        }
       });
 
       await registrarLogAuditoria(
         currentUserEmail,
-        'Registro Posterior de Pago',
-        `Se anotó pago manual vía [${metodoPagoManual}] para la cuota "${cuotaSeleccionadaParaPagar.concepto}". Ref/Recibo: ${referenciaManual.trim()}`
+        'Modificación Administrativa de Cuota',
+        `Se alteró la cuota ID: ${cuotaAEditar.id}. Motivo: ${editMotivoCambio.trim()}`
       );
-      
-      setCuotaSeleccionadaParaPagar(null);
-      setReferenciaManual('');
-      setOpenPagoManualModal(false);
-      setSuccess('Pago recibido anotado y registrado con éxito.');
+
+      setOpenEditarCuotaModal(false);
+      setCuotaAEditar(null);
+      setEditMotivoCambio('');
+      setSuccess('Obligación modificada y auditada correctamente.');
     } catch (err) {
-      setError('No se pudo asentar el pago manual.');
+      setError('No se pudo actualizar la cuota administrativamente.');
     }
   };
 
-  const obtenerSemaforoCuota = (estado, fechaVencimiento) => {
-    if (estado === 'pagada') {
-      return { label: 'PAGADA', color: '#2e7d32', textColor: '#fff' };
-    }
-    if (!fechaVencimiento) {
-      return { label: 'PENDIENTE (DEUDA)', color: '#0288d1', textColor: '#fff' };
-    }
+  const handleEliminarCuotaAdministrativa = async (cuotaObj) => {
+    if (!window.confirm(`⚠️ ADVERTENCIA DE AUDITORÍA CRÍTICA:\n¿Está seguro de eliminar por completo la cuota "${cuotaObj.concepto}"?\nEsta acción es inmutable y quedará grabada en los logs generales.`)) return;
+    
+    try {
+      const cuotaDocRef = doc(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuotaObj.id);
+      await deleteDoc(cuotaDocRef);
 
-    const hoy = new Date();
-    hoy.setHours(0,0,0,0);
-    const vencimiento = new Date(fechaVencimiento + 'T00:00:00');
-    vencimiento.setHours(0,0,0,0);
-
-    if (hoy <= vencimiento) {
-      return { label: 'PENDIENTE', color: '#0288d1', textColor: '#fff' };
-    }
-
-    const diffTiempo = Math.abs(hoy.getTime() - vencimiento.getTime());
-    const diffDias = Math.ceil(diffTiempo / (1000 * 60 * 60 * 24));
-
-    if (diffDias <= 30) {
-      return { label: `MORA (${diffDias} d)`, color: '#ed6c02', textColor: '#fff' };
-    } else {
-      return { label: `RETRASO CRÍTICO (+${diffDias} d)`, color: '#d32f2f', textColor: '#fff' };
+      await registrarLogAuditoria(
+        currentUserEmail,
+        'Eliminación Administrativa de Cuota',
+        `Se eliminó la cuota "${cuotaObj.concepto}" de $${cuotaObj.monto_total.toFixed(2)} perteneciente a la ficha: ${cliente?.apellidos}`
+      );
+      setSuccess('Cuota borrada del expediente de forma permanente.');
+    } catch (err) {
+      setError('No se pudo suprimir la cuota solicitada.');
     }
   };
 
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}><CircularProgress /></Box>
-    );
-  }
+  const handleCondonarSaldoAdministrativo = async (cuotaObj) => {
+    const motivo = window.prompt(`🔒 SOLICITUD DE CONDONACIÓN ADMINISTRATIVA:\nEscriba el motivo justificable para perdonar el saldo insoluto de la cuota "${cuotaObj.concepto}" y darla por cumplida:`);
+    if (!motivo || !motivo.trim()) {
+      alert('Operación cancelada: El motivo es obligatorio para fines contables de la firma.');
+      return;
+    }
+
+    const ahora = new Date();
+    const fechaCR = ahora.toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
+
+    try {
+      const cuotaDocRef = doc(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuotaObj.id);
+      await updateDoc(cuotaDocRef, {
+        estado: 'pagada', // Cambia forzadamente al semáforo verde
+        saldo_pendiente: 0,
+        condonado: true,
+        motivo_condonacion: motivo.trim(),
+        fecha_pago_realizado: fechaCR,
+        registrado_por: currentUserEmail,
+        stripe_status_sync: cuotaObj.stripe_invoice_id ? "void_requested" : null
+      });
+
+      const logInternoRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuotaObj.id, 'historial_cambios');
+      await addDoc(logInternoRef, {
+        tipo_accion: 'condonacion_saldo_insoluto',
+        ejecutado_por: currentUserEmail,
+        fecha: fechaCR,
+        motivo: motivo.trim(),
+        saldo_perdonado: cuotaObj.saldo_pendiente !== undefined ? cuotaObj.saldo_pendiente : cuotaObj.monto_total
+      });
+
+      await registrarLogAuditoria(
+        currentUserEmail,
+        'Condonación de Saldo',
+        `Se dio por cumplida la cuota "${cuotaObj.concepto}" perdonando el saldo restante. Razón: ${motivo.trim()}`
+      );
+      setSuccess('Obligación dada por cumplida mediante condonación legítima.');
+    } catch (err) {
+      setError('No se pudo procesar la condonación.');
+    }
+  };
 
   return (
     <Box>
@@ -666,6 +814,17 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                 </Select>
               </FormControl>
               <TextField label="Número de Identificación" fullWidth value={identificacion} onChange={(e) => setIdentificacion(e.target.value)} required />
+            </Box>
+
+            {/* PREPARACIÓN HACIENDA COSTA RICA: Campos del perfil fiscal corporativo */}
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mb: 2.5 }}>
+              <FormControl fullWidth>
+                <InputLabel>Tipo Cédula Fiscal (Hacienda CR)</InputLabel>
+                <Select value={tipoCedulaFiscal} label="Tipo Cédula Fiscal (Hacienda CR)" onChange={(e) => setTipoCedulaFiscal(e.target.value)}>
+                  {FISCAL_ID_TYPES.map(f => <MenuItem key={f} value={f}>{f}</MenuItem>)}
+                </Select>
+              </FormControl>
+              <TextField label="Número Identificación Fiscal" placeholder="Ej: 1-1234-1234" fullWidth value={cedulaFiscal} onChange={(e) => setCedulaFiscal(e.target.value)} />
             </Box>
             
             <Box sx={{ mb: 2.5 }}>
@@ -760,7 +919,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           
-          {/* INTERFAZ DEL EXPEDIENTE FINANCIERO: PANEL DE CUOTAS QUE DEBE Y REGISTRO DE PAGOS HECHOS */}
+          {/* INTERFAZ DEL EXPEDIENTE FINANCIERO HÍBRIDO AVANZADO */}
           <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'primary.main' }}>
@@ -780,9 +939,22 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                 Establecer Plan
               </Button>
             </Box>
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2.5, fontStyle: 'italic' }}>
-              Visualización y trazabilidad del calendario de cuotas adeudadas y amortizaciones.
-            </Typography>
+            
+            {/* BOTÓN ABIERTO EXTRAORDINARIO (Algoritmo de Cascada) */}
+            <Button
+              fullWidth
+              size="small"
+              variant="outlined"
+              color="success"
+              startIcon={<CheckCircle size={14} />}
+              onClick={() => {
+                setMontoAbonoCascada('');
+                setOpenPagoManualModal(true);
+              }}
+              sx={{ textTransform: 'none', fontWeight: 'bold', borderRadius: 1.5, mb: 2 }}
+            >
+              Registrar Abono Extraordinario (Cascada)
+            </Button>
 
             {planPagos.length === 0 ? (
               <Alert severity="info" sx={{ borderRadius: 2, fontSize: '0.85rem' }}>
@@ -792,6 +964,9 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
               <List sx={{ p: 0, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                 {planPagos.map((cuota) => {
                   const semaforo = obtenerSemaforoCuota(cuota.estado, cuota.fecha_vencimiento);
+                  const simboloMoneda = cuota.moneda === 'crc' ? '¢' : '$';
+                  const exigibleReal = cuota.saldo_pendiente !== undefined ? cuota.saldo_pendiente : cuota.monto_total;
+
                   return (
                     <Box 
                       key={cuota.id} 
@@ -803,7 +978,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                       }}
                     >
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-                        <Box sx={{ maxWidth: '65%' }}>
+                        <Box sx={{ maxWidth: '60%' }}>
                           <Typography variant="body2" fontWeight="bold" color="text.primary">
                             {cuota.concepto}
                           </Typography>
@@ -811,58 +986,95 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                             Fecha Límite: {cuota.fecha_vencimiento}
                           </Typography>
                         </Box>
-                        <Chip 
-                          label={semaforo.label} 
-                          size="small" 
-                          sx={{ 
-                            bgcolor: semaforo.color, 
-                            color: semaforo.textColor, 
-                            fontWeight: 'bold', 
-                            fontSize: '0.68rem',
-                            height: 20 
-                          }} 
-                        />
+                        
+                        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0.5 }}>
+                          <Chip 
+                            label={cuota.condonado ? 'CONDONADA' : semaforo.label} 
+                            size="small" 
+                            sx={{ 
+                              bgcolor: cuota.condonado ? '#7e22ce' : semaforo.color, 
+                              color: semaforo.textColor, 
+                              fontWeight: 'bold', 
+                              fontSize: '0.68rem',
+                              height: 20 
+                            }} 
+                          />
+                          
+                          {/* PANEL DE ACCIONES EXCLUSIVAS DE ADMINISTRADORES */}
+                          {esAdministrador && (
+                            <Box sx={{ display: 'flex', gap: 0.5 }}>
+                              <IconButton 
+                                size="small" 
+                                color="primary" 
+                                title="Editar Obligación"
+                                onClick={() => {
+                                  setCuotaAEditar(cuota);
+                                  setEditConcepto(cuota.concepto);
+                                  setEditMontoNeto(cuota.monto_neto);
+                                  setEditFechaVencimiento(cuota.fecha_vencimiento);
+                                  setOpenEditarCuotaModal(true);
+                                }}
+                              >
+                                <Edit3 size={14} />
+                              </IconButton>
+                              {cuota.estado === 'pendiente' && (
+                                <IconButton 
+                                  size="small" 
+                                  color="secondary" 
+                                  title="Condonar Saldo Insoluto"
+                                  onClick={() => handleCondonarSaldoAdministrativo(cuota)}
+                                >
+                                  <CheckCircle size={14} style={{ color: '#7e22ce' }} />
+                                </IconButton>
+                              )}
+                              <IconButton 
+                                size="small" 
+                                color="error" 
+                                title="Eliminar del Plan"
+                                onClick={() => handleEliminarCuotaAdministrativa(cuota)}
+                              >
+                                <Trash2 size={14} />
+                              </IconButton>
+                            </Box>
+                          )}
+                        </Box>
                       </Box>
 
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 1.5, pt: 1, borderTop: '1px dashed #cbd5e1' }}>
                         <Box>
-                          <Typography variant="caption" color="text.secondary" display="block" sx={{ lineHeight: 1 }}>
-                            Neto: ${cuota.monto_neto.toFixed(2)} | IVA (13%): ${cuota.iva.toFixed(2)}
+                          <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.68rem', lineHeight: 1 }}>
+                            Base: {simboloMoneda}{cuota.monto_neto.toFixed(2)} | IVA 13%: {simboloMoneda}{cuota.iva.toFixed(2)}
                           </Typography>
                           <Typography variant="subtitle2" fontWeight="bold" color="primary.main">
-                            Total Obligación: ${cuota.monto_total.toFixed(2)}
+                            Total: {simboloMoneda}{cuota.monto_total.toFixed(2)}
                           </Typography>
+                          {cuota.monto_pagado > 0 && (
+                            <Typography variant="caption" color="success.main" display="block" sx={{ fontSize: '0.68rem', fontWeight: 'bold' }}>
+                              Abonado: {simboloMoneda}{cuota.monto_pagado.toFixed(2)}
+                            </Typography>
+                          )}
+                          {cuota.estado === 'pendiente' && cuota.monto_pagado > 0 && (
+                            <Typography variant="caption" color="error.main" display="block" sx={{ fontSize: '0.68rem', fontWeight: 'bold' }}>
+                              Saldo Restante: {simboloMoneda}{exigibleReal.toFixed(2)}
+                            </Typography>
+                          )}
                         </Box>
 
-                        {/* ACCIÓN DE REGISTRO POSTERIOR: Anotación manual de recaudaciones bancarias/efectivo */}
-                        {cuota.estado === 'pendiente' ? (
-                          <Button
-                            size="small"
-                            variant="contained"
-                            color="success"
-                            onClick={() => {
-                              setCuotaSeleccionadaParaPagar(cuota);
-                              setOpenPagoManualModal(true);
-                            }}
-                            sx={{ textTransform: 'none', fontSize: '0.72rem', fontWeight: 'bold', borderRadius: 1 }}
-                          >
-                            Anotar Pago
-                          </Button>
-                        ) : (
+                        {cuota.estado === 'pagada' && (
                           <Box sx={{ textAlign: 'right' }}>
                             <Typography variant="caption" color="success.main" display="block" sx={{ fontSize: '0.65rem', fontWeight: 'bold' }}>
-                              {cuota.metodo_pago === 'stripe' ? '💳 Conciliado por Stripe' : `📁 Recaudación Manual (${cuota.metodo_pago})`}
+                              {cuota.condonado ? '📁 Cumplida por Condonación' : (cuota.metodo_pago === 'stripe' ? '💳 Pago por Stripe' : `📁 Recaudación (${cuota.metodo_pago})`)}
                             </Typography>
                             {cuota.comprobante_referencia && (
                               <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.62rem', fontStyle: 'italic' }}>
-                                Ref/Recibo: {cuota.comprobante_referencia}
+                                Comprobante: {cuota.comprobante_referencia}
                               </Typography>
                             )}
                           </Box>
                         )}
                       </Box>
 
-                      {cuota.estado === 'pendiente' && cuota.metodo_pago === 'stripe' && cuota.stripe_invoice_url && (
+                      {cuota.estado === 'pendiente' && cuota.stripe_invoice_url && (
                         <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid #f1f5f9' }}>
                           <Button
                             component="a"
@@ -974,7 +1186,6 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         </DialogTitle>
         <DialogContent dividers>
           
-          {/* PASO 1: SELECCIÓN DEL ORIGEN (DESDE CERO O LLAMAR PLAN GENERAL PREESTABLECIDO) */}
           {faseModal === 1 && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
               <FormControl fullWidth>
@@ -1013,9 +1224,18 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
             </Box>
           )}
 
-          {/* PASO 2: REGLA DE PROYECCIÓN INICIAL (INTERVALOS DISCRETOS O VACÍO TOTAL) */}
           {faseModal === 2 && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+              
+              {/* REQUERIMIENTO MULTIMONEDA: Soporte nativo y selección del plan */}
+              <FormControl fullWidth>
+                <InputLabel>Moneda de la Deuda</InputLabel>
+                <Select value={monedaPlan} label="Moneda de la Deuda" onChange={e => setMonedaPlan(e.target.value)}>
+                  <MenuItem value="usd">Dólares Americanos ($ USD)</MenuItem>
+                  <MenuItem value="crc">Colones Costarricenses (¢ CRC)</MenuItem>
+                </Select>
+              </FormControl>
+
               {origenPlan === 'personalizado' ? (
                 <>
                   <FormControl fullWidth>
@@ -1025,10 +1245,10 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                       label="Regla de Intervalo para el Plan" 
                       onChange={e => setFrecuenciaPlan(e.target.value)}
                     >
-                      <MenuItem value="mensual">Mensual (Proyección automática base)</MenuItem>
-                      <MenuItem value="trimestral">Trimestral (Proyección automática base)</MenuItem>
-                      <MenuItem value="semestral">Semestral (Proyección automática base)</MenuItem>
-                      <MenuItem value="arbitrario">Fechas y Montos Arbitrarios (Nace limpio en blanco)</MenuItem>
+                      <MenuItem value="mensual">Mensual (Proyección automática)</MenuItem>
+                      <MenuItem value="trimestral">Trimestral (Proyección automática)</MenuItem>
+                      <MenuItem value="semestral">Semestral (Proyección automática)</MenuItem>
+                      <MenuItem value="arbitrario">Fechas y Montos Arbitrarios (En blanco)</MenuItem>
                     </Select>
                   </FormControl>
 
@@ -1042,7 +1262,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                   />
 
                   <TextField 
-                    label="Monto Neto base por Cuota (USD)"
+                    label={`Monto Neto por Cuota (${monedaPlan.toUpperCase()})`}
                     type="number" 
                     fullWidth 
                     required={frecuenciaPlan !== 'arbitrario'}
@@ -1065,13 +1285,13 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                   {frecuenciaPlan !== 'arbitrario' && montoNetoCuota && !isNaN(parseFloat(montoNetoCuota)) && (
                     <Box sx={{ p: 1.5, bgcolor: '#f1f5f9', borderRadius: 1.5 }}>
                       <Typography variant="caption" color="text.secondary" display="block">
-                        Base Honorario Neto: ${parseFloat(montoNetoCuota).toFixed(2)}
+                        Base Neto: {monedaPlan === 'crc' ? '¢' : '$'}{parseFloat(montoNetoCuota).toFixed(2)}
                       </Typography>
                       <Typography variant="caption" color="text.secondary" display="block">
-                        IVA Costa Rica (13%): ${(parseFloat(montoNetoCuota) * 0.13).toFixed(2)}
+                        IVA Costa Rica (13%): {monedaPlan === 'crc' ? '¢' : '$'}{(parseFloat(montoNetoCuota) * 0.13).toFixed(2)}
                       </Typography>
                       <Typography variant="subtitle2" fontWeight="bold" color="primary.main">
-                        Total por Cuota Proyectada: ${(parseFloat(montoNetoCuota) * 1.13).toFixed(2)}
+                        Total por Cuota: {monedaPlan === 'crc' ? '¢' : '$'}{(parseFloat(montoNetoCuota) * 1.13).toFixed(2)}
                       </Typography>
                     </Box>
                   )}
@@ -1089,10 +1309,10 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
               ) : (
                 <>
                   <Typography variant="body2" color="text.secondary">
-                    Has seleccionado la plantilla: <strong>{plantillaSeleccionada?.nombre}</strong>. Se generará un plan de {plantillaSeleccionada?.cuotas?.length} pagos según su configuración original.
+                    Plantilla elegida: <strong>{plantillaSeleccionada?.nombre}</strong>. Se poblarán {plantillaSeleccionada?.cuotas?.length} hitos libres.
                   </Typography>
                   <TextField 
-                    label="Fecha Base para el Inicio del Plan" 
+                    label="Fecha de Arranque para la Proyección" 
                     type="date" 
                     fullWidth 
                     required 
@@ -1102,47 +1322,22 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                   />
                 </>
               )}
-
-              <FormControl fullWidth>
-                <InputLabel>Canal Planificado de Alerta / Cobro</InputLabel>
-                <Select 
-                  value={metodoCobroCuota} 
-                  label="Canal Planificado de Alerta / Cobro" 
-                  onChange={e => setMetodoCobroCuota(e.target.value)}
-                >
-                  <MenuItem value="stripe">Disparar Invoice de Stripe al Email al llegar la fecha</MenuItem>
-                  <MenuItem value="manual">Manejo Manual (El cliente pagará en banco o efectivo)</MenuItem>
-                </Select>
-              </FormControl>
             </Box>
           )}
 
-          {/* PASO 3: TABLERO DE AJUSTE FINO TOTAL (LIBERTAD SOBERANA PARA CAMBIAR FECHAS Y MONTOS FILA POR FILA) */}
           {faseModal === 3 && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: '420px', overflowY: 'auto', pt: 1 }}>
               <Alert severity="info" sx={{ borderRadius: 2, fontSize: '0.8rem', py: 0.5, mb: 1 }}>
-                Modifique de forma totalmente libre la fecha, concepto o monto de cada pago. No requieren seguir ningún patrón rígido.
+                Ajuste libremente montos y fechas sin restricciones cronológicas de ningún tipo.
               </Alert>
               {cuotasProyectadas.map((item, idx) => (
-                <Box 
-                  key={item.idTemp} 
-                  sx={{ 
-                    p: 2, 
-                    bgcolor: '#f8fafc', 
-                    borderRadius: 2, 
-                    border: '1px solid #e2e8f0', 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    gap: 1.5 
-                  }}
-                >
+                <Box key={item.idTemp} sx={{ p: 2, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                   <Typography variant="caption" fontWeight="bold" color="primary.main">
-                    EDICIÓN INDEPENDIENTE - PAGO {idx + 1}
+                    EDICIÓN GRANULAR - PAGO {idx + 1}
                   </Typography>
-                  
                   <TextField
                     size="small"
-                    label="Concepto específico de la cuota"
+                    label="Concepto específico"
                     fullWidth
                     required
                     value={item.concepto}
@@ -1152,11 +1347,10 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                       setCuotasProyectadas(nuevas);
                     }}
                   />
-
                   <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
                     <TextField
                       size="small"
-                      label="Monto Neto (USD)"
+                      label={`Monto Neto (${monedaPlan.toUpperCase()})`}
                       type="number"
                       required
                       value={item.monto_neto}
@@ -1168,7 +1362,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                     />
                     <TextField
                       size="small"
-                      label="Fecha de Vencimiento"
+                      label="Vencimiento"
                       type="date"
                       required
                       slotProps={{ inputLabel: { shrink: true } }}
@@ -1180,9 +1374,6 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                       }}
                     />
                   </Box>
-                  <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right', display: 'block', mt: -0.5, fontSize: '0.68rem' }}>
-                    IVA Costa Rica (13%): ${(item.monto_neto * 0.13).toFixed(2)} | Total: ${(item.monto_neto * 1.13).toFixed(2)}
-                  </Typography>
                 </Box>
               ))}
             </Box>
@@ -1191,30 +1382,13 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
           {faseModal > 1 && (
-            <Button 
-              onClick={() => setFaseModal(prev => prev - 1)} 
-              color="primary" 
-              sx={{ textTransform: 'none', mr: 'auto' }}
-            >
-              Atrás
-            </Button>
+            <Button onClick={() => setFaseModal(prev => prev - 1)} color="primary" sx={{ textTransform: 'none', mr: 'auto' }}>Atrás</Button>
           )}
-          <Button 
-            onClick={() => {
-              setOpenCuotaModal(false);
-              setFaseModal(1);
-              setCuotasProyectadas([]);
-            }} 
-            color="inherit" 
-            sx={{ textTransform: 'none' }}
-          >
-            Cancelar
-          </Button>
+          <Button onClick={() => setOpenCuotaModal(false)} color="inherit" sx={{ textTransform: 'none' }}>Cancelar</Button>
           
           {faseModal < 3 ? (
             <Button 
               variant="contained" 
-              disabled={faseModal === 1 && origenPlan === 'plantilla' && !plantillaSeleccionada}
               onClick={() => {
                 if (faseModal === 1) setFaseModal(2);
                 else if (faseModal === 2) generarBorradorDePlanYAvancePaso3();
@@ -1224,19 +1398,14 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
               Siguiente
             </Button>
           ) : (
-            <Button 
-              type="submit" 
-              variant="contained" 
-              onClick={handleCrearCuotaEstructurada}
-              sx={{ textTransform: 'none', fontWeight: 'bold' }}
-            >
+            <Button type="submit" variant="contained" onClick={handleCrearCuotaEstructurada} sx={{ textTransform: 'none', fontWeight: 'bold' }}>
               Confirmar Calendario Completo
             </Button>
           )}
         </DialogActions>
       </Dialog>
 
-      {/* MODAL INDEPENDIENTE: ANOTAR Y REGISTRAR UN PAGO RECIBIDO (CONCILIACIÓN MANUAL) */}
+      {/* MODAL INTRALÓGICO: RECAUDACIÓN EN CASCADA CON BOTE DE DINERO EXTRAORDINARIO */}
       <Dialog
         open={openPagoManualModal}
         onClose={() => setOpenPagoManualModal(false)}
@@ -1247,33 +1416,30 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         slotProps={{
           paper: {
             component: 'form',
-            onSubmit: handleProcesarLiquidacionManual,
+            onSubmit: handleProcesarLiquidacionCascada,
             sx: { borderRadius: 3 }
           }
         }}
       >
-        <DialogTitle fontWeight="bold">Registrar Recaudación Manual</DialogTitle>
+        <DialogTitle fontWeight="bold">Registrar Recaudación Híbrida</DialogTitle>
         <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           <Typography variant="body2" color="text.secondary">
-            Vas a asentar y guardar el pago para la cuota preexistente: <strong style={{ color: '#1a365d' }}>{cuotaSeleccionadaParaPagar?.concepto}</strong>.
+            Digite el monto total recibido. El motor de cascada impactará de forma automática las cuotas más antiguas con saldo pendiente.
           </Typography>
-          
-          <Box sx={{ p: 1.5, bgcolor: '#f0fdf4', borderRadius: 1.5, border: '1px solid #bbf7d0' }}>
-            <Typography variant="body2" color="success.main" fontWeight="bold">
-              Monto Total Recibido: ${cuotaSeleccionadaParaPagar?.monto_total.toFixed(2)}
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              (Base Honorario: ${cuotaSeleccionadaParaPagar?.monto_neto.toFixed(2)} + IVA 13%: ${cuotaSeleccionadaParaPagar?.iva.toFixed(2)})
-            </Typography>
-          </Box>
+
+          <TextField 
+            label="Monto Recibido Abierto (USD / CRC)" 
+            type="number" 
+            fullWidth 
+            required 
+            slotProps={{ input: { step: 'any' } }}
+            value={montoAbonoCascada} 
+            onChange={e => setMontoAbonoCascada(e.target.value)} 
+          />
 
           <FormControl fullWidth>
             <InputLabel>Forma de Pago Recibida</InputLabel>
-            <Select 
-              value={metodoPagoManual} 
-              label="Forma de Pago Recibida" 
-              onChange={e => setMetodoPagoManual(e.target.value)}
-            >
+            <Select value={metodoPagoManual} label="Forma de Pago Recibida" onChange={e => setMetodoPagoManual(e.target.value)}>
               <MenuItem value="Transferencia Bancaria">Transferencia Bancaria (Depósito)</MenuItem>
               <MenuItem value="Efectivo">Efectivo / Caja Física</MenuItem>
             </Select>
@@ -1281,7 +1447,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
 
           <TextField 
             label="Número de Referencia / Comprobante" 
-            placeholder="Ej: Código de transferencia, SINPE o número de recibo" 
+            placeholder="Código bancario o número de recibo" 
             fullWidth 
             required={metodoPagoManual === 'Transferencia Bancaria'}
             value={referenciaManual} 
@@ -1291,7 +1457,48 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         <DialogActions sx={{ p: 2.5 }}>
           <Button onClick={() => setOpenPagoManualModal(false)} color="inherit" sx={{ textTransform: 'none' }}>Cancelar</Button>
           <Button type="submit" variant="contained" color="success" sx={{ textTransform: 'none', fontWeight: 'bold' }}>
-            Confirmar y Guardar Pago
+            Confirmar y Aplicar Cascada
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* MODAL ADJUNTO EXCLUSIVO: Edición Administrativa con Justificación Obligatoria */}
+      <Dialog
+        open={openEditarCuotaModal}
+        onClose={() => setOpenEditarCuotaModal(false)}
+        fullWidth
+        maxWidth="xs"
+        disableEnforceFocus
+        disableRestoreFocus
+        slotProps={{
+          paper: {
+            component: 'form',
+            onSubmit: handleEjecutarEdicionAdministrativa,
+            sx: { borderRadius: 3 }
+          }
+        }}
+      >
+        <DialogTitle fontWeight="bold">🔧 Modificación de Cuota (Auditoría)</DialogTitle>
+        <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+          <TextField label="Concepto de la obligación" fullWidth required value={editConcepto} onChange={e => setEditConcepto(e.target.value)} />
+          <TextField label="Monto Neto" type="number" fullWidth required slotProps={{ input: { step: 'any' } }} value={editMontoNeto} onChange={e => setEditMontoNeto(e.target.value)} />
+          <TextField label="Fecha Vencimiento" type="date" fullWidth required slotProps={{ inputLabel: { shrink: true } }} value={editFechaVencimiento} onChange={e => setEditFechaVencimiento(e.target.value)} />
+          
+          <TextField 
+            label="Motivo / Justificación del Cambio" 
+            placeholder="Escriba la razón de la renegociación o enmienda..." 
+            fullWidth 
+            required 
+            multiline 
+            rows={2} 
+            value={editMotivoCambio} 
+            onChange={e => setEditMotivoCambio(e.target.value)} 
+          />
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button onClick={() => setOpenEditarCuotaModal(false)} color="inherit" sx={{ textTransform: 'none' }}>Cancelar</Button>
+          <Button type="submit" variant="contained" color="primary" sx={{ textTransform: 'none', fontWeight: 'bold' }}>
+            Guardar y Sellar Auditoría
           </Button>
         </DialogActions>
       </Dialog>
