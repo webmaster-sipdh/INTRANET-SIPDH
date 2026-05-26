@@ -9,6 +9,7 @@ import {
   orderBy, 
   serverTimestamp, 
   deleteDoc,
+  setDoc,
   onSnapshot 
 } from 'firebase/firestore';
 import { 
@@ -38,7 +39,11 @@ import {
   Select, 
   MenuItem, 
   IconButton,
-  Collapse
+  Collapse,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions
 } from '@mui/material';
 import { 
   ArrowLeft, 
@@ -53,7 +58,8 @@ import {
   Eye,
   CheckCircle,
   AlertTriangle,
-  Mail
+  Mail,
+  Calendar
 } from 'lucide-react';
 import { registrarLogAuditoria } from '../../utils/auditLogger';
 
@@ -114,7 +120,6 @@ function ItemNotificacion({ item }) {
         <Chip size="small" color={cfg.color} label={cfg.label} sx={{ fontWeight: 'bold', fontSize: '0.7rem', height: 20 }} />
       </Box>
       
-      {/* Botón interactivo para abrir/cerrar el cuerpo del mensaje por omisión */}
       <Button
         size="small"
         variant="text"
@@ -124,7 +129,6 @@ function ItemNotificacion({ item }) {
         {expanded ? "Ocultar contenido del mensaje" : "Ver contenido del mensaje"}
       </Button>
 
-      {/* Contenedor colapsable animado */}
       <Collapse in={expanded}>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', my: 1, whiteSpace: 'pre-wrap', bgcolor: '#ffffff', p: 1, borderRadius: 1, border: '1px solid #e2e8f0' }}>
           {item.cuerpo}
@@ -202,6 +206,22 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
   const [historialComunicados, setHistorialComunicados] = useState([]);
   const [loadingHistorial, setLoadingHistorial] = useState(false);
 
+  // NUEVOS ESTADOS: Gestión Dinámica de Cuotas y Pasarela Híbrida
+  const [planPagos, setPlanPagos] = useState([]);
+  const [openCuotaModal, setOpenCuotaModal] = useState(false);
+  const [openPagoManualModal, setOpenPagoManualModal] = useState(false);
+  
+  // Campos formulario Nueva Cuota
+  const [conceptoCuota, setConceptoCuota] = useState('');
+  const [montoNetoCuota, setMontoNetoCuota] = useState('');
+  const [fechaVencimientoCuota, setFechaVencimientoCuota] = useState('');
+  const [metodoCobroCuota, setMetodoCobroCuota] = useState('stripe');
+
+  // Campos formulario Registro de Pago Manual
+  const [cuotaSeleccionadaParaPagar, setCuotaSeleccionadaParaPagar] = useState(null);
+  const [metodoPagoManual, setMetodoPagoManual] = useState('Transferencia Bancaria');
+  const [referenciaManual, setReferenciaManual] = useState('');
+
   const clienteRef = doc(db, 'casos', casoId, 'clientes', clienteId);
 
   useEffect(() => {
@@ -246,7 +266,13 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       setDocumentos(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    // 4. Escuchador Live para la subcolección autónoma con los DATOS COMPLETOS del comunicado
+    // 4. Escuchador Live para el Plan de Pagos personalizado de este representado
+    const qPagos = query(collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos'), orderBy('fecha_vencimiento', 'asc'));
+    const unsubPagos = onSnapshot(qPagos, (snap) => {
+      setPlanPagos(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    // 5. Escuchador Live para la subcolección autónoma con los DATOS COMPLETOS del comunicado
     setLoadingHistorial(true);
     const historialRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'historial_comunicados');
     const unsubHistorial = onSnapshot(historialRef, (snapHistorial) => {
@@ -281,6 +307,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       unsubCliente();
       unsubNotas();
       unsubDocs();
+      unsubPagos();
       unsubHistorial();
     };
   }, [casoId, clienteId]);
@@ -398,6 +425,123 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       setSuccess('Documento removido correctamente.');
     } catch (err) { 
       setError('Error al eliminar archivo.'); 
+    }
+  };
+
+  // ACCIONES DEL PLAN DE COBROS INDIVIDUALES
+  const handleCrearCuotaEstructurada = async (e) => {
+    e.preventDefault();
+    if (!conceptoCuota.trim() || !montoNetoCuota || !fechaVencimientoCuota) return;
+
+    setError('');
+    setSuccess('');
+    
+    const neto = parseFloat(montoNetoCuota);
+    const ivaCalculado = neto * 0.13; // 13% IVA Costa Rica
+    const total = neto + ivaCalculado;
+
+    try {
+      const planPagosRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos');
+      await addDoc(planPagosRef, {
+        concepto: conceptoCuota.trim(),
+        monto_neto: neto,
+        iva: ivaCalculado,
+        monto_total: total,
+        fecha_vencimiento: fechaVencimientoCuota,
+        estado: 'pendiente',
+        metodo_pago: metodoCobroCuota, // 'stripe' o 'manual'
+        stripe_invoice_id: null,
+        stripe_invoice_url: null,
+        fecha_pago_realizado: null,
+        registrado_por: null,
+        comprobante_referencia: ''
+      });
+
+      await registrarLogAuditoria(
+        currentUserEmail,
+        'Estructuración de Cuota',
+        `Se creó cuota de honorarios por $${total.toFixed(2)} (IVA incl.) con vencimiento ${fechaVencimientoCuota} para ${apellidos}, ${nombres}`
+      );
+
+      setConceptoCuota('');
+      setMontoNetoCuota('');
+      setFechaVencimientoCuota('');
+      setMetodoCobroCuota('stripe');
+      setOpenCuotaModal(false);
+      setSuccess('Cuota incorporada al plan de pagos de forma correcta.');
+    } catch (err) {
+      setError('Error al registrar la cuota en la base de datos.');
+    }
+  };
+
+  const handleProcesarLiquidacionManual = async (e) => {
+    e.preventDefault();
+    if (!cuotaSeleccionadaParaPagar) return;
+
+    setError('');
+    setSuccess('');
+
+    const ahora = new Date();
+    const fechaCR = ahora.toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
+    
+    // Obtener periodo contable YYYY-MM para reportes mensuales automatizados
+    const anio = ahora.getFullYear();
+    const mes = String(ahora.getMonth() + 1).padStart(2, '0');
+    const periodoFiscal = `${anio}-${mes}`;
+
+    try {
+      const cuotaDocRef = doc(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuotaSeleccionadaParaPagar.id);
+      await updateDoc(cuotaDocRef, {
+        estado: 'pagada',
+        fecha_pago_realizado: fechaCR,
+        periodo_fiscal: periodoFiscal,
+        registrado_por: currentUserEmail,
+        metodo_pago: metodoPagoManual === 'Efectivo' ? 'efectivo' : 'transferencia',
+        comprobante_referencia: referenciaManual.trim()
+      });
+
+      await registrarLogAuditoria(
+        currentUserEmail,
+        'Conciliación Manual de Pago',
+        `Se registró pago manual vía [${metodoPagoManual}] para la cuota "${cuotaSeleccionadaParaPagar.concepto}". Ref: ${referenciaManual.trim()}`
+      );
+
+      // Evaluar si todas las cuotas están pagadas para actualizar macro status del cliente
+      // Nota: Esto se sincronizará automáticamente en la siguiente lectura live.
+      
+      setCuotaSeleccionadaParaPagar(null);
+      setReferenciaManual('');
+      setOpenPagoManualModal(false);
+      setSuccess('Pago conciliado manualmente con éxito.');
+    } catch (err) {
+      setError('No se pudo asentar el pago manual.');
+    }
+  };
+
+  const obtenerSemaforoCuota = (estado, fechaVencimiento) => {
+    if (estado === 'pagada') {
+      return { label: 'PAGADA', color: '#2e7d32', textColor: '#fff' };
+    }
+    if (!fechaVencimiento) {
+      return { label: 'PENDIENTE', color: '#0288d1', textColor: '#fff' };
+    }
+
+    const hoy = new Date();
+    hoy.setHours(0,0,0,0);
+    const vencimiento = new Date(fechaVencimiento + 'T00:00:00');
+    vencimiento.setHours(0,0,0,0);
+
+    if (hoy <= vencimiento) {
+      return { label: 'PENDIENTE', color: '#0288d1', textColor: '#fff' };
+    }
+
+    const diffTiempo = Math.abs(hoy.getTime() - vencimiento.getTime());
+    const diffDias = Math.ceil(diffTiempo / (1000 * 60 * 60 * 24));
+
+    if (diffDias <= 30) {
+      return { label: `MORA (${diffDias} d)`, color: '#ed6c02', textColor: '#fff' };
+    } else {
+      return { label: `RETRASO CRÍTICO (+${diffDias} d)`, color: '#d32f2f', textColor: '#fff' };
     }
   };
 
@@ -531,15 +675,122 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         </Box>
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          
+          {/* CONTROL DE PAGOS ELÁSTICO E INDIVIDUAL */}
           <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, color: 'primary.main' }}>
-              <CreditCard size={20} />
-              <Typography variant="h6" fontWeight="bold">Control de Pago</Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'primary.main' }}>
+                <CreditCard size={20} />
+                <Typography variant="h6" fontWeight="bold">Plan de Pagos Individual</Typography>
+              </Box>
+              <Button 
+                size="small"
+                variant="outlined" 
+                startIcon={<Plus size={14} />} 
+                onClick={() => setOpenCuotaModal(true)}
+                sx={{ textTransform: 'none', fontWeight: 'bold', borderRadius: 1.5 }}
+              >
+                Estructurar Cobro
+              </Button>
             </Box>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', bgcolor: '#f8fafc', p: 2, borderRadius: 2 }}>
-              <Typography variant="body2" fontWeight="medium">Estado en Stripe:</Typography>
-              <Chip label={cliente?.estado_pago || 'Pendiente'} color={cliente?.estado_pago === 'Pagado' ? 'success' : 'warning'} sx={{ fontWeight: 'bold' }} />
-            </Box>
+
+            {planPagos.length === 0 ? (
+              <Alert severity="info" sx={{ borderRadius: 2, fontSize: '0.85rem' }}>
+                Este representado no registra un plan de cuotas o cobros configurados.
+              </Alert>
+            ) : (
+              <List sx={{ p: 0, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                {planPagos.map((cuota) => {
+                  const semaforo = obtenerSemaforoCuota(cuota.estado, cuota.fecha_vencimiento);
+                  return (
+                    <Box 
+                      key={cuota.id} 
+                      sx={{ 
+                        p: 2, 
+                        borderRadius: 2, 
+                        bgcolor: cuota.estado === 'pagada' ? '#f0fdf4' : '#ffffff', 
+                        border: cuota.estado === 'pagada' ? '1px solid #bbf7d0' : '1px solid #e2e8f0' 
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+                        <Box sx={{ maxWidth: '65%' }}>
+                          <Typography variant="body2" fontWeight="bold" color="text.primary">
+                            {cuota.concepto}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            Vence el: {cuota.fecha_vencimiento}
+                          </Typography>
+                        </Box>
+                        <Chip 
+                          label={semaforo.label} 
+                          size="small" 
+                          sx={{ 
+                            bgcolor: semaforo.color, 
+                            color: semaforo.textColor, 
+                            fontWeight: 'bold', 
+                            fontSize: '0.68rem',
+                            height: 20 
+                          }} 
+                        />
+                      </Box>
+
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 1.5, pt: 1, borderTop: '1px dashed #cbd5e1' }}>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" display="block" sx={{ lineHeight: 1 }}>
+                            Neto: ${cuota.monto_neto.toFixed(2)} | IVA (13%): ${cuota.iva.toFixed(2)}
+                          </Typography>
+                          <Typography variant="subtitle2" fontWeight="bold" color="primary.main">
+                            Total: ${cuota.monto_total.toFixed(2)}
+                          </Typography>
+                        </Box>
+
+                        {cuota.estado === 'pendiente' ? (
+                          <Button
+                            size="small"
+                            variant="contained"
+                            color="success"
+                            onClick={() => {
+                              setCuotaSeleccionadaParaPagar(cuota);
+                              setOpenPagoManualModal(true);
+                            }}
+                            sx={{ textTransform: 'none', fontSize: '0.72rem', fontWeight: 'bold', borderRadius: 1 }}
+                          >
+                            Pago Manual
+                          </Button>
+                        ) : (
+                          <Box sx={{ textAlign: 'right' }}>
+                            <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.65rem' }}>
+                              {cuota.metodo_pago === 'stripe' ? '💳 Vía Stripe Invoices' : `📁 Recaudación Manual (${cuota.metodo_pago})`}
+                            </Typography>
+                            {cuota.comprobante_referencia && (
+                              <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.62rem', fontStyle: 'italic' }}>
+                                Ref: {cuota.comprobante_referencia}
+                              </Typography>
+                            )}
+                          </Box>
+                        )}
+                      </Box>
+
+                      {cuota.estado === 'pendiente' && cuota.metodo_pago === 'stripe' && cuota.stripe_invoice_url && (
+                        <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid #f1f5f9' }}>
+                          <Button
+                            component="a"
+                            href={cuota.stripe_invoice_url}
+                            target="_blank"
+                            rel="noopener"
+                            size="small"
+                            variant="text"
+                            sx={{ textTransform: 'none', fontSize: '0.68rem', p: 0, minWidth: 0 }}
+                          >
+                            Ver factura emitida en Stripe
+                          </Button>
+                        </Box>
+                      )}
+                    </Box>
+                  );
+                })}
+              </List>
+            )}
           </Paper>
 
           <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
@@ -604,6 +855,146 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
 
         </Box>
       </Box>
+
+      {/* MODAL: CONFIGURAR COBRO O CUOTA INDIVIDUAL */}
+      <Dialog
+        open={openCuotaModal}
+        onClose={() => setOpenCuotaModal(false)}
+        fullWidth
+        maxWidth="xs"
+        disableEnforceFocus
+        disableRestoreFocus
+        slotProps={{
+          paper: {
+            component: 'form',
+            onSubmit: handleCrearCuotaEstructurada,
+            sx: { borderRadius: 3 }
+          }
+        }}
+      >
+        <DialogTitle fontWeight="bold">Estructurar Cobro Individual</DialogTitle>
+        <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+          <TextField 
+            label="Concepto del Cobro" 
+            placeholder="Ej: Cuota Inicial / Estudio de Admisibilidad" 
+            autoFocus 
+            fullWidth 
+            required 
+            value={conceptoCuota} 
+            onChange={e => setConceptoCuota(e.target.value)} 
+          />
+          <TextField 
+            label="Monto Neto (USD)" 
+            type="number" 
+            fullWidth 
+            required 
+            slotProps={{ input: { step: 'any' } }}
+            value={montoNetoCuota} 
+            onChange={e => setMontoNetoCuota(e.target.value)} 
+          />
+          
+          {montoNetoCuota && !isNaN(parseFloat(montoNetoCuota)) && (
+            <Box sx={{ p: 1.5, bgcolor: '#f1f5f9', borderRadius: 1.5 }}>
+              <Typography variant="caption" color="text.secondary" display="block">
+                Honorario Base: ${parseFloat(montoNetoCuota).toFixed(2)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                IVA Costa Rica (13%): ${(parseFloat(montoNetoCuota) * 0.13).toFixed(2)}
+              </Typography>
+              <Typography variant="subtitle2" fontWeight="bold" color="primary.main">
+                Total Exigible: ${(parseFloat(montoNetoCuota) * 1.13).toFixed(2)}
+              </Typography>
+            </Box>
+          )}
+
+          <TextField 
+            label="Fecha Vencimiento" 
+            type="date" 
+            fullWidth 
+            required 
+            slotProps={{ inputLabel: { shrink: true } }} 
+            value={fechaVencimientoCuota} 
+            onChange={e => setFechaVencimientoCuota(e.target.value)} 
+          />
+
+          <FormControl fullWidth>
+            <InputLabel>Mecanismo de Envío / Cobro</InputLabel>
+            <Select 
+              value={metodoCobroCuota} 
+              label="Mecanismo de Envío / Cobro" 
+              onChange={e => setMetodoCobroCuota(e.target.value)}
+            >
+              <MenuItem value="stripe">Disparo Automático en Fecha Vía Stripe Invoice (Email)</MenuItem>
+              <MenuItem value="manual">Recaudación Manual Interna (Efectivo/Transferencia)</MenuItem>
+            </Select>
+          </FormControl>
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button onClick={() => setOpenCuotaModal(false)} color="inherit" sx={{ textTransform: 'none' }}>Cancelar</Button>
+          <Button type="submit" variant="contained" sx={{ textTransform: 'none', fontWeight: 'bold' }}>Guardar Cuota</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* MODAL: ASENTAR CONCILIACIÓN DE PAGO MANUAL */}
+      <Dialog
+        open={openPagoManualModal}
+        onClose={() => setOpenPagoManualModal(false)}
+        fullWidth
+        maxWidth="xs"
+        disableEnforceFocus
+        disableRestoreFocus
+        slotProps={{
+          paper: {
+            component: 'form',
+            onSubmit: handleProcesarLiquidacionManual,
+            sx: { borderRadius: 3 }
+          }
+        }}
+      >
+        <DialogTitle fontWeight="bold">Registrar Recaudación Manual</DialogTitle>
+        <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+          <Typography variant="body2" color="text.secondary">
+            Vas a registrar un pago fuera de la pasarela Stripe para la cuota: <strong style={{ color: '#1a365d' }}>{cuotaSeleccionadaParaPagar?.concepto}</strong>.
+          </Typography>
+          
+          <Box sx={{ p: 1.5, bgcolor: '#f0fdf4', borderRadius: 1.5, border: '1px solid #bbf7d0' }}>
+            <Typography variant="body2" color="success.main" fontWeight="bold">
+              Monto a Conciliar: ${cuotaSeleccionadaParaPagar?.monto_total.toFixed(2)}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              (Incluye Base: ${cuotaSeleccionadaParaPagar?.monto_neto.toFixed(2)} + IVA 13%: ${cuotaSeleccionadaParaPagar?.iva.toFixed(2)})
+            </Typography>
+          </Box>
+
+          <FormControl fullWidth>
+            <InputLabel>Canal de Recaudación</InputLabel>
+            <Select 
+              value={metodoPagoManual} 
+              label="Canal de Recaudación" 
+              onChange={e => setMetodoPagoManual(e.target.value)}
+            >
+              <MenuItem value="Transferencia Bancaria">Transferencia Bancaria</MenuItem>
+              <MenuItem value="Efectivo">Efectivo / Caja Personal</MenuItem>
+            </Select>
+          </FormControl>
+
+          <TextField 
+            label="Número de Referencia / Comprobante" 
+            placeholder="Ej: Código de transferencia o recibo físico" 
+            fullWidth 
+            required={metodoPagoManual === 'Transferencia Bancaria'}
+            value={referenciaManual} 
+            onChange={e => setReferenciaManual(e.target.value)} 
+          />
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5 }}>
+          <Button onClick={() => setOpenPagoManualModal(false)} color="inherit" sx={{ textTransform: 'none' }}>Cancelar</Button>
+          <Button type="submit" variant="contained" color="success" sx={{ textTransform: 'none', fontWeight: 'bold' }}>
+            Asentar Pago Legítimo
+          </Button>
+        </DialogActions>
+      </Dialog>
+
     </Box>
   );
 }

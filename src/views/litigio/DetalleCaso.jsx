@@ -11,7 +11,9 @@ import {
   query, 
   orderBy,
   updateDoc,
-  arrayUnion
+  arrayUnion,
+  collectionGroup,
+  onSnapshot
 } from 'firebase/firestore';
 import { 
   ref, 
@@ -199,7 +201,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
   const [telefonoPrincipal, setTelefonoPrincipal] = useState('');
   const [pais, setPais] = useState('Costa Rica');
   const [direccion, setDireccion] = useState('');
-  const [notas, setNotas] = useState('');
+  const [notes, setNotas] = useState('');
 
   // Estados para control de plazos procesales fatales
   const [localPlazos, setLocalPlazos] = useState(caso.plazos || []);
@@ -244,6 +246,10 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
   const [tipoDestinatario, setTipoDestinatario] = useState('todos'); 
   const [clientesSeleccionadosIds, setClientesSeleccionadosIds] = useState([]);
   const [filtroDestinatarios, setFiltroDestinatarios] = useState('');
+
+  // NUEVOS ESTADOS EXCLUSIVOS: Consolidación Financiera General del Caso
+  const [todasLasCuotas, setTodasLasCuotas] = useState([]);
+  const [loadingPagos, setLoadingPagos] = useState(false);
 
   const fetchClientes = async () => {
     setLoading(true);
@@ -296,6 +302,32 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
     fetchComunicados();
   }, [caso.id, caso.plazos]);
 
+  // SUSCRIPCIÓN INTEGRADORA EN TIEMPO REAL: Recauda todas las cuotas del caso actual
+  useEffect(() => {
+    setLoadingPagos(true);
+    const qAllCuotas = collectionGroup(db, 'plan_pagos');
+    const unsubscribeCuotas = onSnapshot(qAllCuotas, (snapshot) => {
+      const cuotasDelCaso = snapshot.docs
+        .filter(docSnap => docSnap.ref.path.includes(caso.id))
+        .map(docSnap => {
+          const pathParts = docSnap.ref.path.split('/');
+          const clienteId = pathParts[3]; // Extrae la clave jerárquica del representado
+          return {
+            id: docSnap.id,
+            clienteId,
+            ...docSnap.data()
+          };
+        });
+      setTodasLasCuotas(cuotasDelCaso);
+      setLoadingPagos(false);
+    }, (err) => {
+      console.error("Error en telemetría de recaudación unificada:", err);
+      setLoadingPagos(false);
+    });
+
+    return () => unsubscribeCuotas();
+  }, [caso.id]);
+
   const handleCreateCliente = async (e) => {
     e.preventDefault();
     if (!nombres.trim() || !apellidos.trim() || !identificacion.trim()) return;
@@ -315,7 +347,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         telefono_secundario: '',
         pais: pais,
         direccion: direccion.trim(),
-        notas: notas.trim(),
+        notas: notes.trim(),
         estado_pago: 'Pendiente',
         stripe_customer_id: '',
         fecha_registro: serverTimestamp()
@@ -734,6 +766,65 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
 
   const clientesPaginados = clientesFiltrados.slice(page * rowsPerPage, (page * rowsPerPage) + rowsPerPage);
 
+  // LOGICA FRONTEND INTERNA: Agrupación dinámica por Periodo Fiscal para el Dashboard
+  const desgloseFinancieroMensual = {};
+  let totalRecaudadoNetoGlobal = 0;
+  let totalIvaAcumuladoGlobal = 0;
+  let totalGeneralRecaudadoGlobal = 0;
+  let totalPendienteCobroGlobal = 0;
+
+  todasLasCuotas.forEach(cuota => {
+    if (cuota.estado === 'pagada') {
+      totalRecaudadoNetoGlobal += cuota.monto_neto || 0;
+      totalIvaAcumuladoGlobal += cuota.iva || 0;
+      totalGeneralRecaudadoGlobal += cuota.monto_total || 0;
+
+      let periodo = cuota.periodo_fiscal;
+      if (!periodo && cuota.fecha_pago_realizado) {
+        try {
+          const partes = cuota.fecha_pago_realizado.split('/');
+          if (partes.length >= 3) {
+            const anio = partes[2].split(',')[0].trim();
+            const mes = partes[1].padStart(2, '0');
+            periodo = `${anio}-${mes}`;
+          }
+        } catch (e) {
+          periodo = 'Histórico';
+        }
+      }
+      if (!periodo) periodo = 'Histórico';
+
+      if (!desgloseFinancieroMensual[periodo]) {
+        desgloseFinancieroMensual[periodo] = {
+          periodo,
+          neto: 0,
+          iva: 0,
+          total: 0,
+          stripe: 0,
+          transferencia: 0,
+          efectivo: 0
+        };
+      }
+
+      desgloseFinancieroMensual[periodo].neto += cuota.monto_neto || 0;
+      desgloseFinancieroMensual[periodo].iva += cuota.iva || 0;
+      desgloseFinancieroMensual[periodo].total += cuota.monto_total || 0;
+
+      if (cuota.metodo_pago === 'stripe') {
+        desgloseFinancieroMensual[periodo].stripe += cuota.monto_total || 0;
+      } else if (cuota.metodo_pago === 'transferencia') {
+        desgloseFinancieroMensual[periodo].transferencia += cuota.monto_total || 0;
+      } else if (cuota.metodo_pago === 'efectivo') {
+        desgloseFinancieroMensual[periodo].efectivo += cuota.monto_total || 0;
+      }
+    } else if (cuota.estado === 'pendiente') {
+      totalPendienteCobroGlobal += cuota.monto_total || 0;
+    }
+  });
+
+  const arrayCronologicoFinanciero = Object.values(desgloseFinancieroMensual)
+    .sort((a, b) => b.periodo.localeCompare(a.periodo));
+
   if (clienteSeleccionadoId) {
     return (
       <FichaCliente 
@@ -989,12 +1080,161 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         </Paper>
       </TabPanel>
 
-      {/* PESTAÑA 3: PAGOS */}
+      {/* PESTAÑA 3: EXPEDIENTE FINANCIERO Y CONTROL DE IVA MENSUAL */}
       <TabPanel value={activeTab} index={2}>
-        <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
-          <Typography variant="h6" fontWeight="bold" gutterBottom>Pasarela de Stripe</Typography>
-          <Typography variant="body2" color="text.secondary">Registro general de conciliación de pagos de este litigio.</Typography>
-        </Paper>
+        {loadingPagos ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
+        ) : (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            
+            {/* 1. SECCIÓN SUPERIOR DE INDICADORES MACRO (KPI CARDS) */}
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
+              <Paper sx={{ p: 2.5, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
+                <Typography variant="caption" fontWeight="bold" color="text.secondary" display="block" uppercase>
+                  Base Imponible Recaudada
+                </Typography>
+                <Typography variant="h5" fontWeight="bold" sx={{ mt: 1, color: 'text.primary' }}>
+                  ${totalRecaudadoNetoGlobal.toFixed(2)}
+                </Typography>
+              </Paper>
+              <Paper sx={{ p: 2.5, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none', bgcolor: '#fbf7f5' }}>
+                <Typography variant="caption" fontWeight="bold" color="orange" display="block">
+                  IVA Acumulado (13% CR)
+                </Typography>
+                <Typography variant="h5" fontWeight="bold" sx={{ mt: 1, color: '#ed6c02' }}>
+                  ${totalIvaAcumuladoGlobal.toFixed(2)}
+                </Typography>
+              </Paper>
+              <Paper sx={{ p: 2.5, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none', bgcolor: '#f0fdf4' }}>
+                <Typography variant="caption" fontWeight="bold" color="green" display="block">
+                  Gran Total Percibido
+                </Typography>
+                <Typography variant="h5" fontWeight="bold" sx={{ mt: 1, color: '#2e7d32' }}>
+                  ${totalGeneralRecaudadoGlobal.toFixed(2)}
+                </Typography>
+              </Paper>
+              <Paper sx={{ p: 2.5, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none', bgcolor: '#f0f9ff' }}>
+                <Typography variant="caption" fontWeight="bold" color="primary.main" display="block">
+                  Cuentas por Cobrar Pendientes
+                </Typography>
+                <Typography variant="h5" fontWeight="bold" sx={{ mt: 1, color: '#0288d1' }}>
+                  ${totalPendienteCobroGlobal.toFixed(2)}
+                </Typography>
+              </Paper>
+            </Box>
+
+            {/* 2. TABLA CONSOLIDADA MES A MES PARA DECLARACIÓN FISCAL */}
+            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
+              <Typography variant="subtitle1" fontWeight="bold" color="primary.main" gutterBottom>
+                Control Impositivo de IVA por Periodo Fiscal (Mensual)
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+                Valores calculados de forma automática según la legislación fiscal de Costa Rica (13% sobre base imponible).
+              </Typography>
+
+              {arrayCronologicoFinanciero.length === 0 ? (
+                <Alert severity="info" sx={{ borderRadius: 2 }}>
+                  No se registran recaudaciones completadas en ningún periodo fiscal para este caso.
+                </Alert>
+              ) : (
+                <TableContainer component={Paper} sx={{ boxShadow: 'none', border: '1px solid #e2e8f0', borderRadius: 2 }}>
+                  <Table size="small">
+                    <TableHead sx={{ bgcolor: '#f8fafc' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Periodo (Año-Mes)</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Base Honorario (Neto)</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', color: '#ed6c02' }}>IVA Devengado (13%)</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Monto Total Recaudado</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold', textAlign: 'center' }}>Canales (Stripe / Transf / Caja)</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {arrayCronologicoFinanciero.map((row) => (
+                        <TableRow key={row.periodo} hover>
+                          <TableCell sx={{ fontWeight: 'bold' }}>{row.periodo}</TableCell>
+                          <TableCell>${row.neto.toFixed(2)}</TableCell>
+                          <TableCell sx={{ color: '#ed6c02', fontWeight: 'medium' }}>${row.iva.toFixed(2)}</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold', color: 'primary.main' }}>${row.total.toFixed(2)}</TableCell>
+                          <TableCell sx={{ textAlign: 'center' }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1 }}>
+                              <Chip label={`💳 Stripe: $${row.stripe.toFixed(0)}`} size="small" variant="outlined" sx={{ fontSize: '0.65rem' }} />
+                              <Chip label={`🏛️ Transf: $${row.transferencia.toFixed(0)}`} size="small" variant="outlined" sx={{ fontSize: '0.65rem' }} />
+                              <Chip label={`💵 Caja: $${row.efectivo.toFixed(0)}`} size="small" variant="outlined" sx={{ fontSize: '0.65rem' }} />
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </Paper>
+
+            {/* 3. HISTORIAL COMPLETO Y DETALLADO DE TRANSACCIONES */}
+            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 2 }}>
+                Bitácora Global de Movimientos y Conciliaciones
+              </Typography>
+
+              {todasLasCuotas.length === 0 ? (
+                <Alert severity="info" sx={{ borderRadius: 2 }}>
+                  Este litigio no reporta ninguna cuota estructurada hasta la fecha.
+                </Alert>
+              ) : (
+                <TableContainer component={Paper} sx={{ boxShadow: 'none', border: '1px solid #e2e8f0', borderRadius: 2 }}>
+                  <Table size="small">
+                    <TableHead sx={{ bgcolor: '#f8fafc' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Representado (Cliente)</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Concepto</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Vencimiento</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Estatus</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Monto Total</TableCell>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Método / Auditoría</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {todasLasCuotas.map((cuota) => {
+                        const clienteAsociado = clientes.find(c => c.id === cuota.clienteId);
+                        return (
+                          <TableRow key={cuota.id} hover>
+                            <TableCell sx={{ fontWeight: 'medium' }}>
+                              {clienteAsociado ? `${clienteAsociado.apellidos}, ${clienteAsociado.nombres}` : 'Desconocido'}
+                            </TableCell>
+                            <TableCell variant="body2">{cuota.concepto}</TableCell>
+                            <TableCell>{cuota.fecha_vencimiento}</TableCell>
+                            <TableCell>
+                              <Chip 
+                                label={cuota.estado.toUpperCase()} 
+                                size="small" 
+                                color={cuota.estado === 'pagada' ? 'success' : 'warning'}
+                                sx={{ fontWeight: 'bold', fontSize: '0.65rem', height: 18 }}
+                              />
+                            </TableCell>
+                            <TableCell sx={{ fontWeight: 'bold' }}>${cuota.monto_total.toFixed(2)}</TableCell>
+                            <TableCell>
+                              <Typography variant="caption" display="block" sx={{ lineHeight: 1 }}>
+                                {cuota.estado === 'pagada' 
+                                  ? (cuota.metodo_pago === 'stripe' ? '💳 Stripe Invoice' : `📁 Manual (${cuota.metodo_pago})`)
+                                  : `⏰ Programado (${cuota.metodo_pago})`}
+                              </Typography>
+                              {cuota.comprobante_referencia && (
+                                <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.62rem', fontStyle: 'italic' }}>
+                                  Ref: {cuota.comprobante_referencia}
+                                </Typography>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </Paper>
+
+          </Box>
+        )}
       </TabPanel>
 
       {/* PESTAÑA 4: CONTROL DE VENCIMIENTOS PROCESALES */}
@@ -1205,7 +1445,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
             <TextField label="Dirección Física Completa" fullWidth multiline rows={2} value={direccion} onChange={(e) => setDireccion(e.target.value)} />
           </Box>
           
-          <TextField label="Notas Jurídicas Iniciales" fullWidth multiline rows={2} value={notas} onChange={(e) => setNotas(e.target.value)} />
+          <TextField label="Notas Jurídicas Iniciales" fullWidth multiline rows={2} value={notes} onChange={(e) => setNotas(e.target.value)} />
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
           <Button onClick={() => setOpenModal(false)} color="inherit">Cancelar</Button>
