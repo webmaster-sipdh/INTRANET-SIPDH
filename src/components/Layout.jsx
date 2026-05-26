@@ -138,7 +138,6 @@ export default function Layout({ children, currentView, setView, userRole }) {
                       <ListItemIcon sx={{ color: currentView === item.id ? 'primary.main' : 'text.disabled', minWidth: 40 }}>
                         {item.icon}
                       </ListItemIcon>
-                      <ListItemTemplate text={item.text} currentView={currentView} item={item} />
                       <ListItemText 
                         primary={item.text} 
                         primaryTypographyProps={{ 
