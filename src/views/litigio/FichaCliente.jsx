@@ -108,6 +108,36 @@ const COUNTRIES = [
 ];
 
 // =====================================================================================
+// UTILERÍA FINANCIERA CORREGIDA: Definición del Semáforo de Control de Riesgos
+// =====================================================================================
+const obtenerSemaforoCuota = (estado, fechaVencimiento) => {
+  const estadoLimpio = String(estado || '').toLowerCase().trim();
+
+  if (estadoLimpio === 'pagada' || estadoLimpio === 'pagado') {
+    return { label: 'PAGADO', color: '#22c55e', textColor: '#ffffff' }; // Verde Esmeralda (Cumplido)
+  }
+
+  // Si está pendiente pero la fecha límite es inferior al día de hoy, marcar como vencido de forma dinámica
+  if (fechaVencimiento) {
+    try {
+      const hoy = new Date();
+      hoy.setHours(0, 0, 0, 0);
+      const [anio, mes, dia] = fechaVencimiento.split('-').map(Number);
+      const fechaLimite = new Date(anio, mes - 1, dia);
+      
+      if (fechaLimite < hoy) {
+        return { label: 'VENCIDO', color: '#ef4444', textColor: '#ffffff' }; // Rojo Coral (Mora)
+      }
+    } catch (err) {
+      console.error("Falla en parseo cronológico de cuota:", err);
+    }
+  }
+
+  // Estado por defecto o pendiente ordinario
+  return { label: 'PENDIENTE', color: '#f59e0b', textColor: '#ffffff' }; // Ámbar Intenso (Alerta de cobro)
+};
+
+// =====================================================================================
 // SUB-COMPONENTE ENCAPSULADO: Notificaciones
 // =====================================================================================
 function ItemNotificacion({ item }) {
@@ -289,7 +319,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
       setLoading(false);
     });
 
-    const unsubNotas = onSnapshot(query(collection(db, 'casos', casoId, 'clientes', clienteId, 'notas'), orderBy('fecha', 'desc')), (snap) => {
+    const unsubNotas = onSnapshot(query(collection(db, 'casos', casoId, 'clientes', clienteId, 'notes'), orderBy('fecha', 'desc')), (snap) => {
       setNotas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
@@ -381,7 +411,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
   const handleAddNota = async () => {
     if (!nuevaNota.trim()) return;
     try {
-      const refNotas = collection(db, 'casos', casoId, 'clientes', clienteId, 'notas');
+      const refNotas = collection(db, 'casos', casoId, 'clientes', clienteId, 'notes');
       await addDoc(refNotas, { 
         texto: nuevaNota.trim(), 
         fecha: serverTimestamp() 
@@ -530,13 +560,12 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           fecha_vencimiento: item.fecha_vencimiento, 
           estado: 'pendiente',
           metodo_pago: null,
-          moneda: monedaPlan, // REQUERIMIENTO MULTIMONEDA PERSISTIDO
+          moneda: monedaPlan, 
           stripe_invoice_id: null,
           stripe_invoice_url: null,
           fecha_pago_realizado: null,
           registrado_por: null,
           comprobante_referencia: '',
-          // PREPARACIÓN HACIENDA CR (Estructura interna oculta API Ready)
           codigo_actividad: "691001",
           impuesto_codigo: "01",
           impuesto_tarifa: 13,
@@ -566,9 +595,6 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     }
   };
 
-  // =====================================================================================
-  // ALGORITMO COMPUESTO SOBERANO: Motor de Cascada para Amortización Extraordinaria Abierta
-  // =====================================================================================
   const handleProcesarLiquidacionCascada = async (e) => {
     e.preventDefault();
     let bolsaDinero = parseFloat(montoAbonoCascada);
@@ -581,7 +607,6 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     const fechaCR = ahora.toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
     const periodoFiscal = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}`;
 
-    // Filtrar cuotas pendientes ordenadas estrictamente por vencimiento cronológico antiguo
     const cuotasPendientesOrdenadas = planPagos
       .filter(c => c.estado === 'pendiente')
       .sort((a, b) => a.fecha_vencimiento.localeCompare(b.fecha_vencimiento));
@@ -604,14 +629,12 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         let nuevoMontoPagado = cuota.monto_pagado || 0;
 
         if (bolsaDinero >= saldoExigibleActual) {
-          // Cubre la totalidad de la cuota o el remanente pendiente
           abonoEfectivoParaEstaCuota = saldoExigibleActual;
           bolsaDinero -= saldoExigibleActual;
           nuevoEstado = 'pagada';
           nuevoSaldoPendiente = 0;
           nuevoMontoPagado = cuota.monto_total;
         } else {
-          // Pago parcial: Agota el bote de dinero extraordinario
           abonoEfectivoParaEstaCuota = bolsaDinero;
           nuevoSaldoPendiente = saldoExigibleActual - bolsaDinero;
           nuevoMontoPagado = (cuota.monto_pagado || 0) + bolsaDinero;
@@ -628,13 +651,11 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           registrado_por: currentUserEmail,
           metodo_pago: metodoPagoManual === 'Efectivo' ? 'efectivo' : 'transferencia',
           comprobante_referencia: referenciaManual.trim(),
-          // LIFECYCLE STRIPE SYNC: Al amortizar manualmente, forzamos bandera de void/cancelación externa
           stripe_status_sync: cuota.stripe_invoice_id ? "void_requested" : null
         };
 
         await updateDoc(cuotaDocRef, mutacionCampos);
 
-        // BITÁCORA LOCAL ADJUNTA (Control de Fraude Interno en Ficha): Registro inmutable interno
         const logInternoRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuota.id, 'historial_cambios');
         await addDoc(logInternoRef, {
           tipo_accion: 'abono_cascada',
@@ -661,7 +682,6 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     }
   };
 
-  // SUPERPODERES ADMINISTRATIVOS: Mutación granular controlada por Superadmin/Admin
   const handleEjecutarEdicionAdministrativa = async (e) => {
     e.preventDefault();
     if (!cuotaAEditar || !editConcepto.trim() || !editMontoNeto || !editFechaVencimiento || !editMotivoCambio.trim()) return;
@@ -692,7 +712,6 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         fecha_vencimiento: editFechaVencimiento
       });
 
-      // BITÁCORA LOCAL DE CONTROL INTERNO ANTI-FRAUDE
       const logInternoRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuotaAEditar.id, 'historial_cambios');
       await addDoc(logInternoRef, {
         tipo_accion: 'modificacion_administrativa',
@@ -754,7 +773,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     try {
       const cuotaDocRef = doc(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuotaObj.id);
       await updateDoc(cuotaDocRef, {
-        estado: 'pagada', // Cambia forzadamente al semáforo verde
+        estado: 'pagada', 
         saldo_pendiente: 0,
         condonado: true,
         motivo_condonacion: motivo.trim(),
