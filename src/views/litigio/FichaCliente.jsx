@@ -105,7 +105,7 @@ const COUNTRIES = [
   { code: 'CA', name: 'Canadá', phone: '+1' },
   { code: 'GB', name: 'Reino Unido', phone: '+44' },
   { code: 'FR', name: 'Francia', phone: '+33' },
-  { code: 'DE', name: 'Alemania', phone: '+49' },
+  { code: 'DE', name: 'Alemania', phone: '#49' },
   { code: 'IT', name: 'Italia', phone: '+39' }
 ];
 
@@ -278,15 +278,33 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
   
   const [cuotasProyectadas, setCuotasProyectadas] = useState([]);
 
-  // Recaudación Abierta (Cascada)
+  // Recaudación Abierta (Cascada) e inputs dinámicos multifiscales
   const [montoAbonoCascada, setMontoAbonoCascada] = useState('');
   const [metodoPagoManual, setMetodoPagoManual] = useState('Transferencia Bancaria');
   const [referenciaManual, setReferenciaManual] = useState('');
   const [permitirCondonacionAdministrativa, setPermitirCondonacionAdministrativa] = useState(false);
+  const [monedaRecibidaManual, setMonedaRecibidaManual] = useState('usd');
+  const [tipoCambioManualInput, setTipoCambioManualInput] = useState('');
 
   const clienteRef = doc(db, 'casos', casoId, 'clientes', clienteId);
 
   const esAdministrador = userRole === 'Superadmin' || userRole === 'Admin';
+
+  // CONSULTA AUTOMÁTICA EN VIVO: Se conecta al API cambiario oficial del BCCR al elegir colones
+  useEffect(() => {
+    if (monedaRecibidaManual === 'crc' && openPagoManualModal) {
+      fetch('https://tipodecambio.paginasweb.cr/api')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.venta) {
+            setTipoCambioManualInput(data.venta.toString());
+          }
+        })
+        .catch(err => {
+          console.error("No se pudo conectar de forma automática con el API del BCCR:", err);
+        });
+    }
+  }, [monedaRecibidaManual, openPagoManualModal]);
 
   useEffect(() => {
     setLoading(true);
@@ -631,13 +649,29 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
     }
   };
 
+  // =====================================================================================
+  // ALGORITMO COMPUESTO: Motor de Conversión de Divisas v4.4 y Liquidación en Cascada
+  // =====================================================================================
   const handleProcesarLiquidacionCascada = async (e) => {
     e.preventDefault();
+    let montoEnColonesParaAuditoria = 0;
+    let tipoCambioAplicado = 1;
     let poolDinero = parseFloat(montoAbonoCascada);
     if (!poolDinero || poolDinero <= 0) return;
 
     setError('');
     setSuccess('');
+
+    // Si el abono físico entra en colones (CRC), se ejecuta la conversión instantánea a dólares (USD)
+    if (monedaRecibidaManual === 'crc') {
+      tipoCambioAplicado = parseFloat(tipoCambioManualInput);
+      if (!tipoCambioAplicado || tipoCambioAplicado <= 0) {
+        setError('Operación Cancelada: El tipo de cambio es obligatorio para transacciones en colones.');
+        return;
+      }
+      montoEnColonesParaAuditoria = poolDinero;
+      poolDinero = poolDinero / tipoCambioAplicado; 
+    }
 
     const ahora = new Date();
     const fechaCR = ahora.toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
@@ -687,7 +721,9 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
           registrado_por: currentUserEmail,
           metodo_pago: metodoPagoManual === 'Efectivo' ? 'efectivo' : (metodoPagoManual === 'SINPE MOVIL' ? 'sinpe' : 'transferencia'),
           comprobante_referencia: referenciaManual.trim(),
-          stripe_status_sync: cuota.stripe_invoice_id ? "void_requested" : null
+          stripe_status_sync: cuota.stripe_invoice_id ? "void_requested" : null,
+          monto_colones_original: montoEnColonesParaAuditoria,
+          tipo_cambio_banco: tipoCambioAplicado
         };
 
         await updateDoc(cuotaDocRef, mutacionCampos);
@@ -695,22 +731,26 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         const logInternoRef = collection(db, 'casos', casoId, 'clientes', clienteId, 'plan_pagos', cuota.id, 'historial_cambios');
         await addDoc(logInternoRef, {
           tipo_accion: 'abono_cascada',
-          monto_aplicado: abonoEfectivoParaEstaCuota,
+          monto_applied: abonoEfectivoParaEstaCuota,
           saldo_restante_cuota: nuevoSaldoPendiente,
           ejecutado_por: currentUserEmail,
           fecha: fechaCR,
-          referencia: referenciaManual.trim()
+          referencia: referenciaManual.trim(),
+          monto_colones_original: montoEnColonesParaAuditoria,
+          tipo_cambio_banco: tipoCambioAplicado
         });
       }
 
       await registrarLogAuditoria(
         currentUserEmail,
         'Recaudación Abierta en Cascada',
-        `Se procesó un abono extraordinario de $${parseFloat(montoAbonoCascada).toFixed(2)} diluyéndose en las cuotas más antiguas.`
+        `Se procesó un abono extraordinario de ${montoAbonoCascada} ${monedaRecibidaManual.toUpperCase()} convertido a USD diluyéndose en las cuotas más antiguas.`
       );
 
       setMontoAbonoCascada('');
       setReferenciaManual('');
+      setMonedaRecibidaManual('usd');
+      setTipoCambioManualInput('');
       setOpenPagoManualModal(false);
       setSuccess('Abono extraordinario procesado e impactado en cascada correctamente.');
     } catch (err) {
@@ -883,7 +923,7 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
                 label="Número Identificación Fiscal" 
                 placeholder="Ej: 1-1234-1234 o ID Extranjero alfanumérico" 
                 fullWidth 
-                slotProps={{ input: { maxLength: 20 } }} // Mandatorio v4.4
+                slotProps={{ input: { maxLength: 20 } }} 
                 value={cedulaFiscal} 
                 onChange={(e) => setCedulaFiscal(e.target.value)} 
               />
@@ -1467,10 +1507,14 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         </DialogActions>
       </Dialog>
 
-      {/* MODAL INTRALÓGICO: RECAUDACIÓN EN CASCADA CON BOTE DE DINERO EXTRAORDINARIO */}
+      {/* MODAL INTRALÓGICO: RECAUDACIÓN EN CASCADA CON CONVERSIÓN EN CALIENTE AUTOMÁTICA */}
       <Dialog
         open={openPagoManualModal}
-        onClose={() => setOpenPagoManualModal(false)}
+        onClose={() => {
+          setOpenPagoManualModal(false);
+          setMonedaRecibidaManual('usd');
+          setTipoCambioManualInput('');
+        }}
         fullWidth
         maxWidth="xs"
         disableEnforceFocus
@@ -1486,11 +1530,27 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
         <DialogTitle fontWeight="bold">Registrar Recaudación Híbrida</DialogTitle>
         <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           <Typography variant="body2" color="text.secondary">
-            Digite el monto total recibido. El motor de cascada impactará de forma automática las cuotas más antiguas con saldo pendiente.
+            Digite el monto total recibido. Si selecciona colones, el sistema consultará en tiempo real el tipo de cambio oficial de venta del BCCR y convertirá el bote a USD antes de la amortización.
           </Typography>
 
+          {/* Selector de Moneda de Entrada Física */}
+          <FormControl fullWidth>
+            <InputLabel>Moneda Recibida</InputLabel>
+            <Select 
+              value={monedaRecibidaManual} 
+              label="Moneda Recibida" 
+              onChange={e => {
+                setMonedaRecibidaManual(e.target.value);
+                if(e.target.value === 'usd') setTipoCambioManualInput('');
+              }}
+            >
+              <MenuItem value="usd">Dólares Americanos ($ USD)</MenuItem>
+              <MenuItem value="crc">Colones Costarricenses (¢ CRC)</MenuItem>
+            </Select>
+          </FormControl>
+
           <TextField 
-            label="Monto Recibido Abierto (USD / CRC)" 
+            label={`Monto Recibido en ${monedaRecibidaManual.toUpperCase()}`}
             type="number" 
             fullWidth 
             required 
@@ -1499,7 +1559,21 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
             onChange={e => setMontoAbonoCascada(e.target.value)} 
           />
 
-          {/* SELECTOR AMPLIADO BAJO REGLAS DE LA NOTA 6 - MINISTERIO DE HACIENDA v4.4 */}
+          {/* Campo de Tipo de Cambio Dinámico Automatizado por API */}
+          {monedaRecibidaManual === 'crc' && (
+            <TextField 
+              label="Tipo de Cambio de Venta (BCCR)"
+              placeholder="Ej: 518.45"
+              type="number" 
+              fullWidth 
+              required
+              slotProps={{ input: { step: 'any' } }}
+              value={tipoCambioManualInput} 
+              onChange={e => setTipoCambioManualInput(e.target.value)} 
+              helperText={montoAbonoCascada && tipoCambioManualInput ? `Equivale en tu contabilidad a: $${(parseFloat(montoAbonoCascada) / parseFloat(tipoCambioManualInput)).toFixed(2)} USD` : ""}
+            />
+          )}
+
           <FormControl fullWidth>
             <InputLabel>Forma de Pago Recibida</InputLabel>
             <Select value={metodoPagoManual} label="Forma de Pago Recibida" onChange={e => setMetodoPagoManual(e.target.value)}>
@@ -1514,13 +1588,13 @@ export default function FichaCliente({ casoId, clienteId, onVolver, currentUserE
             label="Número de Referencia / Comprobante" 
             placeholder="Código bancario o número de recibo" 
             fullWidth 
-            required={metodoPagoManual === 'Transferencia Bancaria'}
+            required={metodoPagoManual === 'Transferencia Bancaria' || metodoPagoManual === 'SINPE MOVIL'}
             value={referenciaManual} 
             onChange={e => setReferenciaManual(e.target.value)} 
           />
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
-          <Button onClick={() => setOpenPagoManualModal(false)} color="inherit" sx={{ textTransform: 'none' }}>Cancelar</Button>
+          <Button onClick={() => { setOpenPagoManualModal(false); setMonedaRecibidaManual('usd'); setTipoCambioManualInput(''); }} color="inherit" sx={{ textTransform: 'none' }}>Cancelar</Button>
           <Button type="submit" variant="contained" color="success" sx={{ textTransform: 'none', fontWeight: 'bold' }}>
             Confirmar y Aplicar Cascada
           </Button>

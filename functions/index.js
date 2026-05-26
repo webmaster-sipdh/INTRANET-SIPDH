@@ -14,7 +14,7 @@ const stripe = require('stripe')(stripeSecret);
 
 // Importaciones modulares de segunda generación (v2)
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onDocumentUpdated } = require("firebase-functions/v2/firestore"); // CORRECCIÓN DEFINITIVA
+const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 
 /**
  * UTILERÍA AUXILIAR: Formatea montos según las reglas de Stripe.
@@ -144,8 +144,6 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
         datosActualizacion.entregado_at = fechaCR;
         datosActualizacion.estado = 'Entregado';
       } else if (tipoEvento === 'open') {
-        // 🛡️ FILTRO 3: Si el webhook de apertura llega pero ya el sistema está en 'Entregado',
-        // verificamos que la marca no sea sospechosamente idéntica para evitar ráfagas de escáner
         datosActualizacion.abierto_at = fechaCR;
         datosActualizacion.estado = 'Abierto';
       } else if (tipoEvento === 'bounce') {
@@ -158,7 +156,7 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
       console.log(`🎉 Evento [${tipoEvento}] procesado legítimamente para el cliente: ${clienteId}`);
     }
     
-    res.status(200).send('Eventos procesados correctamente');
+    res.status(200).send('Eventos processed correctamente');
   } catch (error) {
     console.error('❌ Error ejecutando el bucle del webhook:', error);
     res.status(500).send('Internal Server Error');
@@ -166,7 +164,7 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
 });
 
 // =====================================================================================
-// MOTOR CRON: Tarea programada nocturna v2 exigida por firebase-functions v7
+// MOTOR CRON: Tarea programada nocturna v2 con consulta cambiaria automatizada BCCR
 // =====================================================================================
 exports.nightlyBillingCron = onSchedule({
   schedule: '0 0 * * *', 
@@ -174,6 +172,19 @@ exports.nightlyBillingCron = onSchedule({
 }, async (event) => {
   const hoyCR = obtenerFechaActualCR();
   console.log(`[CRON] Iniciando barrido masivo de obligaciones para la fecha fiscal: ${hoyCR}`);
+
+  // REQUERIMIENTO COMPUESTO v4.4: Consulta automatizada de tasa oficial al BCCR para la ventana fiscal diaria
+  let tipoCambioVentaBCCR = 1;
+  try {
+    const apiRes = await fetch('https://tipodecambio.paginasweb.cr/api');
+    const apiData = await apiRes.json();
+    if (apiData && apiData.venta) {
+      tipoCambioVentaBCCR = parseFloat(apiData.venta);
+      console.log(`[CRON API] Tipo de cambio oficial de venta obtenido correctamente del BCCR: ¢${tipoCambioVentaBCCR}`);
+    }
+  } catch (errCambiario) {
+    console.error(`[CRON WARNING] Falla al consumir el API cambiario de Costa Rica. Se usará valor neutro (1):`, errCambiario);
+  }
 
   try {
     const snapshotCuotas = await db.collectionGroup('plan_pagos')
@@ -250,11 +261,13 @@ exports.nightlyBillingCron = onSchedule({
 
         const finalizedInvoice = await stripe.invoices.sendInvoice(invoice.id);
 
+        // Actualización persistiendo la traza del tipo de cambio oficial de la v4.4
         await cuotaRef.update({
           stripe_invoice_id: finalizedInvoice.id,
           stripe_invoice_url: finalizedInvoice.hosted_invoice_url,
           metodo_pago: 'stripe',
-          fecha_cobro_disparado: new Date().toISOString()
+          fecha_cobro_disparado: new Date().toISOString(),
+          tipo_cambio_banco: tipoCambioVentaBCCR
         });
 
         console.log(`[CRON SUCCESS] Cobro electrónico enviado con éxito a: ${emailCliente} | Invoice ID: ${finalizedInvoice.id}`);
@@ -352,7 +365,6 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
 exports.syncStripeInvoiceStatus = onDocumentUpdated(
   'casos/{casoId}/clientes/{clienteId}/plan_pagos/{cuotaId}', 
   async (event) => {
-    // En v2, los datos anterior y nuevo se extraen desde event.data
     const dataNueva = event.data.after.data();
     const cuotaRef = event.data.after.ref;
 

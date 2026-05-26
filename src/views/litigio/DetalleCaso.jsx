@@ -25,8 +25,6 @@ import {
   Box, 
   Button, 
   Typography, 
-  Tabs, 
-  Tab, 
   Paper, 
   Table, 
   TableBody, 
@@ -58,7 +56,9 @@ import {
   FormControlLabel,
   FormLabel,
   Checkbox,
-  Collapse
+  Collapse,
+  Tabs,
+  Tab
 } from '@mui/material';
 import { 
   ArrowLeft, 
@@ -559,7 +559,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                 fechaPresentacion: new Date().toLocaleString(),
                 documentoProbatorioNombre: fileProbatorio.name,
                 documentoProbatorioUrl: downloadURL,
-                documentoProbatorioDescripcion: descripcionProbatorio.trim(),
+                documentoProbatorioDescription: descripcionProbatorio.trim(),
                 documentoProbatorioFechaDocumento: fechaDocumentoProbatorio,
                 storage_path: storagePath
               };
@@ -818,7 +818,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         desgloseFinancieroMensual[periodo].efectivo += cuota.monto_total || 0;
       }
     } else if (cuota.estado === 'pendiente') {
-      // Tomamos en consideración los saldos pendientes granulares de pagos parciales
+      // Tomamos en consideration los saldos pendientes granulares de pagos parciales
       totalPendienteCobroGlobal += cuota.saldo_pendiente !== undefined ? cuota.saldo_pendiente : cuota.monto_total;
     }
   });
@@ -1237,6 +1237,12 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                               {cuota.comprobante_referencia && (
                                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.62rem', fontStyle: 'italic' }}>
                                   Ref: {cuota.comprobante_referencia}
+                                </Typography>
+                              )}
+                              {/* RASTRO DE AUDITORÍA MULTIMONEDA HACIENDA v4.4 */}
+                              {cuota.monto_colones_original > 0 && (
+                                <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.62rem', fontStyle: 'italic', color: 'orange' }}>
+                                  Original: ¢{cuota.monto_colones_original.toLocaleString()} (T/C: {cuota.tipo_cambio_banco})
                                 </Typography>
                               )}
                             </TableCell>
