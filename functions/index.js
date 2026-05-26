@@ -6,6 +6,36 @@ if (!admin.apps.length) {
 }
 const db = admin.firestore();
 
+// =====================================================================================
+// INICIALIZACIÓN ESTRUCTURAL DE STRIPE (Añadida de forma limpia)
+// =====================================================================================
+const stripeSecret = process.env.STRIPE_SECRET_KEY || functions.config().stripe?.secret;
+const stripe = require('stripe')(stripeSecret);
+
+/**
+ * UTILERÍA AUXILIAR: Formatea montos según las reglas de Stripe.
+ * Identifica monedas de cero decimales como el Colón Costarricense (CRC).
+ */
+function obtenerUnidadesStripe(monto, moneda) {
+  const monedaLimpia = moneda.toLowerCase().trim();
+  if (monedaLimpia === 'crc') {
+    return Math.round(monto);
+  }
+  return Math.round(monto * 100);
+}
+
+/**
+ * UTILERÍA AUXILIAR: Obtiene la fecha actual en YYYY-MM-DD en la zona horaria de Costa Rica.
+ */
+function obtenerFechaActualCR() {
+  const opciones = { timeZone: 'America/Costa_Rica', year: 'numeric', month: '2-digit', day: '2-digit' };
+  const formateador = new Intl.DateTimeFormat('en-CA', opciones);
+  return formateador.format(new Date());
+}
+
+// =====================================================================================
+// TU WEBHOOK ORIGINAL DE SENDGRID (100% INTACTO Y SIN ALTERACIONES)
+// =====================================================================================
 exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
   const eventos = req.body;
 
@@ -130,3 +160,224 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
     res.status(500).send('Internal Server Error');
   }
 });
+
+// =====================================================================================
+// NUEVO 1. MOTOR CRON: Tarea programada nocturna para emisión automática de cobros
+// =====================================================================================
+exports.nightlyBillingCron = functions.pubsub
+  .schedule('0 0 * * *') // Se ejecuta estrictamente cada medianoche (Hora de Costa Rica)
+  .timeZone('America/Costa_Rica')
+  .onRun(async (context) => {
+    const hoyCR = obtenerFechaActualCR();
+    console.log(`[CRON] Iniciando barrido masivo de obligaciones para la fecha fiscal: ${hoyCR}`);
+
+    try {
+      const snapshotCuotas = await db.collectionGroup('plan_pagos')
+        .where('estado', '==', 'pendiente')
+        .where('fecha_vencimiento', '==', hoyCR)
+        .get();
+
+      if (snapshotCuotas.empty) {
+        console.log(`[CRON] No se detectaron cuotas calendarizadas para cobro el día de hoy.`);
+        return null;
+      }
+
+      console.log(`[CRON] Se localizaron ${snapshotCuotas.size} transacciones pendientes para procesar.`);
+
+      for (const docCuota of snapshotCuotas.docs) {
+        const cuotaData = docCuota.data();
+        const cuotaRef = docCuota.ref;
+
+        const pathParts = cuotaRef.path.split('/');
+        const casoId = pathParts[1];
+        const clienteId = pathParts[3];
+
+        const clienteSnap = await db.collection('casos').doc(casoId).collection('clientes').doc(clienteId).get();
+        if (!clienteSnap.exists) {
+          console.error(`[CRON ERROR] Ficha de cliente inexistente para la cuota: ${cuotaRef.path}`);
+          continue;
+        }
+
+        const clienteData = clienteSnap.data();
+        const emailCliente = clienteData.correo_principal || clienteData.correo;
+        const nombreCompleto = `${clienteData.nombres || ''} ${clienteData.apellidos || ''}`.trim();
+
+        if (!emailCliente) {
+          console.error(`[CRON ERROR] Omisión de cobro: El representado ${nombreCompleto} no registra email en su ficha.`);
+          continue;
+        }
+
+        try {
+          let stripeCustomerId = clienteData.stripe_customer_id;
+
+          if (!stripeCustomerId) {
+            console.log(`[CRON] Creando perfil de cliente en Stripe para: ${emailCliente}`);
+            const customer = await stripe.customers.create({
+              email: emailCliente.toLowerCase().trim(),
+              name: nombreCompleto,
+              metadata: { casoId, clienteId }
+            });
+            stripeCustomerId = customer.id;
+            
+            await db.collection('casos').doc(casoId).collection('clientes').doc(clienteId).update({
+              stripe_customer_id: stripeCustomerId
+            });
+          }
+
+          const monedaFormateada = (cuotaData.moneda || 'usd').toLowerCase();
+          const unidadesMoneda = obtenerUnidadesStripe(cuotaData.monto_total, monedaFormateada);
+
+          console.log(`[CRON] Fijando hito financiero en Stripe por valor de: ${cuotaData.monto_total} ${monedaFormateada.toUpperCase()}`);
+          await stripe.invoiceItems.create({
+            customer: stripeCustomerId,
+            amount: unidadesMoneda,
+            currency: monedaFormateada,
+            description: cuotaData.concepto,
+            metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
+          });
+
+          const invoice = await stripe.invoices.create({
+            customer: stripeCustomerId,
+            auto_advance: true,
+            collection_method: 'send_invoice',
+            days_until_due: 7, 
+            metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
+          });
+
+          const finalizedInvoice = await stripe.invoices.sendInvoice(invoice.id);
+
+          await cuotaRef.update({
+            stripe_invoice_id: finalizedInvoice.id,
+            stripe_invoice_url: finalizedInvoice.hosted_invoice_url,
+            metodo_pago: 'stripe',
+            fecha_cobro_disparado: new Date().toISOString()
+          });
+
+          console.log(`[CRON SUCCESS] Cobro electrónico enviado con éxito a: ${emailCliente} | Invoice ID: ${finalizedInvoice.id}`);
+
+        } catch (stripeErr) {
+          console.error(`[CRON STRIPE ERROR] Error procesando pasarela para la cuota ${cuotaRef.path}:`, stripeErr);
+        }
+      }
+
+    } catch (globalErr) {
+      console.error(`[CRON CRITICAL ERROR] Detención inesperada de la tarea programada masiva:`, globalErr);
+    }
+
+    return null;
+  });
+
+// =====================================================================================
+// NUEVO 2. WEBHOOK RECEPTOR: Captura y conciliación automática de pagos en línea
+// =====================================================================================
+exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET || functions.config().stripe?.webhook_secret;
+  
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.rawBody, sig, endpointSecret);
+  } catch (err) {
+    console.error(`[WEBHOOK ERROR] Error de validación criptográfica de firma: ${err.message}`);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'invoice.paid') {
+    const invoice = event.data.object;
+    const invoiceId = invoice.id;
+    
+    console.log(`[WEBHOOK] Capturado evento de pago exitoso para la Invoice de Stripe: ${invoiceId}`);
+
+    try {
+      const queryCuota = await db.collectionGroup('plan_pagos')
+        .where('stripe_invoice_id', '==', invoiceId)
+        .limit(1)
+        .get();
+
+      if (queryCuota.empty) {
+        console.error(`[WEBHOOK ERROR] Conciliación huérfana: No existe ningún plan de pago en Firestore enlazado a la Invoice: ${invoiceId}`);
+        return res.status(200).json({ received: true, status: 'orphan_invoice' });
+      }
+
+      const cuotaDoc = queryCuota.docs[0];
+      const cuotaRef = cuotaDoc.ref;
+      const cuotaData = cuotaDoc.data();
+
+      const pathParts = cuotaRef.path.split('/');
+      const casoId = pathParts[1];
+      const clienteId = pathParts[3];
+
+      const ahora = new Date();
+      const fechaCRStr = ahora.toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
+      const periodoFiscalStr = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}`;
+
+      await cuotaRef.update({
+        estado: 'pagada',
+        saldo_pendiente: 0,
+        monto_pagado: cuotaData.monto_total,
+        fecha_pago_realizado: fechaCRStr,
+        periodo_fiscal: periodoFiscalStr,
+        metodo_pago: 'stripe',
+        comprobante_referencia: invoice.payment_intent || invoice.charge || 'Stripe-API'
+      });
+
+      await db.collection('casos').doc(casoId).collection('clientes').doc(clienteId).update({
+        estado_pago: 'Pagado'
+      });
+
+      await db.collection('logs_auditoria').add({
+        usuario: 'STRIPE_WEBHOOK_AUTOMATICO',
+        accion: 'Conciliación Automática de Pago',
+        detalles: `El sistema validó el pago digital de la factura "${cuotaData.concepto}" por la suma total de cobro correspondiente al caso ID: ${casoId}`,
+        fecha: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+    } catch (dbErr) {
+      console.error(`[WEBHOOK CRITICAL ERROR] Error de base de datos durante la conciliación de Stripe:`, dbErr);
+      return res.status(500).send('Internal Database Error');
+    }
+  }
+
+  return res.status(200).json({ received: true });
+});
+
+// =====================================================================================
+// NUEVO 3. TRIGGER BASE DE DATOS: Cancelación / Void externa en Stripe ante Recaudación Manual
+// =====================================================================================
+exports.syncStripeInvoiceStatus = functions.firestore
+  .document('casos/{casoId}/clientes/{clienteId}/plan_pagos/{cuotaId}')
+  .onUpdate(async (change, context) => {
+    const dataNueva = change.after.data();
+    const cuotaRef = change.after.ref;
+
+    if (dataNueva.stripe_status_sync === 'void_requested' && dataNueva.stripe_invoice_id) {
+      console.log(`[DB TRIGGER] Detectada solicitud de cancelación externa para la Invoice de Stripe: ${dataNueva.stripe_invoice_id}`);
+      
+      try {
+        const currentStripeInvoice = await stripe.invoices.retrieve(dataNueva.stripe_invoice_id);
+
+        if (currentStripeInvoice.status === 'draft') {
+          console.log(`[DB TRIGGER] Removiendo borrador de factura en Stripe: ${dataNueva.stripe_invoice_id}`);
+          await stripe.invoices.delete(dataNueva.stripe_invoice_id);
+        } 
+        else if (currentStripeInvoice.status === 'open') {
+          console.log(`[DB TRIGGER] Ejecutando comando de anulación (Void) en Stripe para: ${dataNueva.stripe_invoice_id}`);
+          await stripe.invoices.voidInvoice(dataNueva.stripe_invoice_id);
+        }
+
+        await cuotaRef.update({
+          stripe_status_sync: null,
+          stripe_invoice_status_cloud: 'voided'
+        });
+
+        console.log(`[DB TRIGGER SUCCESS] Sincronización de ciclo de vida completada para la Invoice: ${dataNueva.stripe_invoice_id}`);
+
+      } catch (stripeVoidErr) {
+        console.error(`[DB TRIGGER STRIPE ERROR] No se pudo anular la factura en Stripe de forma remota:`, stripeVoidErr);
+        await cuotaRef.update({ stripe_status_sync: null });
+      }
+    }
+
+    return null;
+  });
