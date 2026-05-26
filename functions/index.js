@@ -7,12 +7,13 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 // =====================================================================================
-// INICIALIZACIÓN DE STRIPE PARA STANDAR v7 (Sin usar functions.config())
+// INICIALIZACIÓN DE STRIPE Y MÓDULOS MODERNOS V2 (Compatibles con v7)
 // =====================================================================================
-// Se añade un fallback de texto para evitar que la librería de Stripe colapse el analizador
-// de Firebase CLI durante el empaquetado ('firebase deploy').
 const stripeSecret = process.env.STRIPE_SECRET_KEY || 'sk_placeholder_for_deployment_analysis';
 const stripe = require('stripe')(stripeSecret);
+
+// Importación modular del planificador v2 exigido por firebase-functions v7
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 
 /**
  * UTILERÍA AUXILIAR: Formatea montos según las reglas de Stripe.
@@ -164,95 +165,95 @@ exports.webhookSendGrid = functions.https.onRequest(async (req, res) => {
 });
 
 // =====================================================================================
-// MOTOR CRON: Tarea programada nocturna para emisión automática de cobros
+// CORRECCIÓN MODULAR: Tarea programada nocturna v2 exigida por firebase-functions v7
 // =====================================================================================
-exports.nightlyBillingCron = functions.pubsub
-  .schedule('0 0 * * *') 
-  .timeZone('America/Costa_Rica')
-  .onRun(async (context) => {
-    const hoyCR = obtenerFechaActualCR();
-    console.log(`[CRON] Iniciando barrido masivo de obligaciones para la fecha fiscal: ${hoyCR}`);
+exports.nightlyBillingCron = onSchedule({
+  schedule: '0 0 * * *', // Cada medianoche
+  timeZone: 'America/Costa_Rica'
+}, async (event) => {
+  const hoyCR = obtenerFechaActualCR();
+  console.log(`[CRON] Iniciando barrido masivo de obligaciones para la fecha fiscal: ${hoyCR}`);
 
-    try {
-      const snapshotCuotas = await db.collectionGroup('plan_pagos')
-        .where('estado', '==', 'pendiente')
-        .where('fecha_vencimiento', '==', hoyCR)
-        .get();
+  try {
+    const snapshotCuotas = await db.collectionGroup('plan_pagos')
+      .where('estado', '==', 'pendiente')
+      .where('fecha_vencimiento', '==', hoyCR)
+      .get();
 
-      if (snapshotCuotas.empty) {
-        console.log(`[CRON] No se detectaron cuotas calendarizadas para cobro el día de hoy.`);
-        return null;
+    if (snapshotCuotas.empty) {
+      console.log(`[CRON] No se detectaron cuotas calendarizadas para cobro el día de hoy.`);
+      return null;
+    }
+
+    console.log(`[CRON] Se localizaron ${snapshotCuotas.size} transacciones pendientes para procesar.`);
+
+    for (const docCuota of snapshotCuotas.docs) {
+      const cuotaData = docCuota.data();
+      const cuotaRef = docCuota.ref;
+
+      const pathParts = cuotaRef.path.split('/');
+      const casoId = pathParts[1];
+      const clienteId = pathParts[3];
+
+      const clienteSnap = await db.collection('casos').doc(casoId).collection('clientes').doc(clienteId).get();
+      if (!clienteSnap.exists) {
+        console.error(`[CRON ERROR] Ficha de cliente inexistente para la cuota: ${cuotaRef.path}`);
+        continue;
       }
 
-      console.log(`[CRON] Se localizaron ${snapshotCuotas.size} transacciones pendientes para procesar.`);
+      const clienteData = clienteSnap.data();
+      const emailCliente = clienteData.correo_principal || clienteData.correo;
+      const nombreCompleto = `${clienteData.nombres || ''} ${clienteData.apellidos || ''}`.trim();
 
-      for (const docCuota of snapshotCuotas.docs) {
-        const cuotaData = docCuota.data();
-        const cuotaRef = docCuota.ref;
+      if (!emailCliente) {
+        console.error(`[CRON ERROR] Omisión de cobro: El representado ${nombreCompleto} no registra email en su ficha.`);
+        continue;
+      }
 
-        const pathParts = cuotaRef.path.split('/');
-        const casoId = pathParts[1];
-        const clienteId = pathParts[3];
+      try {
+        let stripeCustomerId = clienteData.stripe_customer_id;
 
-        const clienteSnap = await db.collection('casos').doc(casoId).collection('clientes').doc(clienteId).get();
-        if (!clienteSnap.exists) {
-          console.error(`[CRON ERROR] Ficha de cliente inexistente para la cuota: ${cuotaRef.path}`);
-          continue;
+        if (!stripeCustomerId) {
+          console.log(`[CRON] Creando perfil de cliente en Stripe para: ${emailCliente}`);
+          const customer = await stripe.customers.create({
+            email: emailCliente.toLowerCase().trim(),
+            name: nombreCompleto,
+            metadata: { casoId, clienteId }
+          });
+          stripeCustomerId = customer.id;
+          
+          await db.collection('casos').doc(casoId).collection('clientes').doc(clienteId).update({
+            stripe_customer_id: stripeCustomerId
+          });
         }
 
-        const clienteData = clienteSnap.data();
-        const emailCliente = clienteData.correo_principal || clienteData.correo;
-        const nombreCompleto = `${clienteData.nombres || ''} ${clienteData.apellidos || ''}`.trim();
+        const monedaFormateada = (cuotaData.moneda || 'usd').toLowerCase();
+        const unidadesMoneda = obtenerUnidadesStripe(cuotaData.monto_total, monedaFormateada);
 
-        if (!emailCliente) {
-          console.error(`[CRON ERROR] Omisión de cobro: El representado ${nombreCompleto} no registra email en su ficha.`);
-          continue;
-        }
+        console.log(`[CRON] Fijando hito financiero en Stripe por valor de: ${cuotaData.monto_total} ${monedaFormateada.toUpperCase()}`);
+        await stripe.invoiceItems.create({
+          customer: stripeCustomerId,
+          amount: unidadesMoneda,
+          currency: monedaFormateada,
+          description: cuotaData.concepto,
+          metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
+        });
 
-        try {
-          let stripeCustomerId = clienteData.stripe_customer_id;
+        const invoice = await stripe.invoices.create({
+          customer: stripeCustomerId,
+          auto_advance: true,
+          collection_method: 'send_invoice',
+          days_until_due: 7, 
+          metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
+        });
 
-          if (!stripeCustomerId) {
-            console.log(`[CRON] Creando perfil de cliente en Stripe para: ${emailCliente}`);
-            const customer = await stripe.customers.create({
-              email: emailCliente.toLowerCase().trim(),
-              name: nombreCompleto,
-              metadata: { casoId, clienteId }
-            });
-            stripeCustomerId = customer.id;
-            
-            await db.collection('casos').doc(casoId).collection('clientes').doc(clienteId).update({
-              stripe_customer_id: stripeCustomerId
-            });
-          }
+        const finalizedInvoice = await stripe.invoices.sendInvoice(invoice.id);
 
-          const monedaFormateada = (cuotaData.moneda || 'usd').toLowerCase();
-          const unidadesMoneda = obtenerUnidadesStripe(cuotaData.monto_total, monedaFormateada);
-
-          console.log(`[CRON] Fijando hito financiero en Stripe por valor de: ${cuotaData.monto_total} ${monedaFormateada.toUpperCase()}`);
-          await stripe.invoiceItems.create({
-            customer: stripeCustomerId,
-            amount: unidadesMoneda,
-            currency: monedaFormateada,
-            description: cuotaData.concepto,
-            metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
-          });
-
-          const invoice = await stripe.invoices.create({
-            customer: stripeCustomerId,
-            auto_advance: true,
-            collection_method: 'send_invoice',
-            days_until_due: 7, 
-            metadata: { cuotaId: docCuota.id, pathCuota: cuotaRef.path }
-          });
-
-          const finalizedInvoice = await stripe.invoices.sendInvoice(invoice.id);
-
-          await cuotaRef.update({
-            stripe_invoice_id: finalizedInvoice.id,
-            stripe_invoice_url: finalizedInvoice.hosted_invoice_url,
-            metodo_pago: 'stripe',
-            fecha_cobro_disparado: new Date().toISOString()
+        await cuotaRef.update({
+          stripe_invoice_id: finalizedInvoice.id,
+          stripe_invoice_url: finalizedInvoice.hosted_invoice_url,
+          metodo_pago: 'stripe',
+          fecha_cobro_disparado: new Date().toISOString()
           });
 
           console.log(`[CRON SUCCESS] Cobro electrónico enviado con éxito a: ${emailCliente} | Invoice ID: ${finalizedInvoice.id}`);
@@ -328,7 +329,7 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
         estado_pago: 'Pagado'
       });
 
-      await db.collection('logs_auditory').add({
+      await db.collection('logs_auditoria').add({
         usuario: 'STRIPE_WEBHOOK_AUTOMATICO',
         accion: 'Conciliación Automática de Pago',
         detalles: `El sistema validó el pago digital de la factura "${cuotaData.concepto}" por la suma total de cobro correspondiente al caso ID: ${casoId}`,
