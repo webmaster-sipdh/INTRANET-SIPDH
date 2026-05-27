@@ -352,8 +352,8 @@ exports.nightlyBillingCron = onSchedule({
           metodo_pago: 'stripe',
           fecha_cobro_disparado: new Date().toISOString(),
           tipo_cambio_banco: tipoCambioVentaBCCR,
-          casoId: casoId,
-          clienteId: clienteId
+          caso_Id: casoId,
+          cliente_Id: clienteId
         });
 
         console.log(`[CRON SUCCESS] Cobro electrónico enviado. Sincronizado perfectamente con vencimiento al: ${cuotaData.fecha_vencimiento} | Invoice ID: ${finalizedInvoice.id}`);
