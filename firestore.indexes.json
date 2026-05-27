@@ -1,15 +1,27 @@
 {
-  "indexes": [
+  "indexes": [],
+  "fieldOverrides": [
     {
       "collectionGroup": "plan_pagos",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
+      "fieldPath": "caso_id",
+      "indexes": [
         {
-          "fieldPath": "caso_id",
-          "order": "ASCENDING"
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "DESCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION_GROUP"
+        },
+        {
+          "order": "DESCENDING",
+          "queryScope": "COLLECTION_GROUP"
         }
       ]
     }
-  ],
-  "fieldOverrides": []
+  ]
 }
