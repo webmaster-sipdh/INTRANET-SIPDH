@@ -10,6 +10,7 @@ import {
   deleteDoc, 
   query, 
   orderBy,
+  where,
   updateDoc,
   arrayUnion,
   collectionGroup,
@@ -126,9 +127,6 @@ function TabPanel(props) {
   );
 }
 
-// =====================================================================================
-// SUB-COMPONENTE ENCAPSULADO: Maneja la expansión individual en el Historial de Casos
-// =====================================================================================
 function ItemComunicadoMasivo({ c }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -184,13 +182,11 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
   const [error, setError] = useState('');
   const [clienteSeleccionadoId, setClienteSeleccionadoId] = useState(null);
   
-  // Estados para documentos comunes compartidos
   const [docsComunes, setDocsComunes] = useState([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [uploadProgressDoc, setUploadProgressDoc] = useState(0);
 
-  // Estados del formulario del representado
   const [openModal, setOpenModal] = useState(false);
   const [nombres, setNombres] = useState('');
   const [apellidos, setApellidos] = useState('');
@@ -203,7 +199,6 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
   const [direccion, setDireccion] = useState('');
   const [notes, setNotas] = useState('');
 
-  // Estados para control de plazos procesales fatales
   const [localPlazos, setLocalPlazos] = useState(caso.plazos || []);
   const [openPlazoModal, setOpenPlazoModal] = useState(false);
   const [descripcionPlazo, setDescripcionPlazo] = useState('');
@@ -211,28 +206,23 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
   const [openCerrarModal, setOpenCerrarModal] = useState(false);
   const [plazoAActivar, setPlazoAActivar] = useState(null);
   
-  // Estados de carga para el documento probatorio del plazo
   const [fileProbatorio, setFileProbatorio] = useState(null);
   const [uploadingPlazoDoc, setUploadingPlazoDoc] = useState(false);
   const [uploadProgressPlazoDoc, setUploadProgressPlazoDoc] = useState(0);
 
-  // Nuevos estados para metadatos del documento de plazos
   const [descripcionProbatorio, setDescripcionProbatorio] = useState('');
   const [fechaDocumentoProbatorio, setFechaDocumentoProbatorio] = useState('');
 
-  // Estado para el área de arrastre (Drag and Drop) e inputs de documentos comunes
   const [isDragging, setIsDragging] = useState(false);
   const [openUploadModal, setOpenUploadModal] = useState(false);
   const [fileComunSeleccionado, setFileComunSeleccionado] = useState(null);
   const [descripcionComun, setDescripcionComun] = useState('');
   const [fechaDocumentoComun, setFechaDocumentoComun] = useState('');
 
-  // Estados locales para la caja de búsqueda y la paginación masiva de representados
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
-  // Estados locales para la sección de comunicados masivos enviados
   const [comunicados, setComunicados] = useState([]);
   const [loadingComunicados, setLoadingComunicados] = useState(false);
   const [openComunicadoModal, setOpenComunicadoModal] = useState(false);
@@ -242,12 +232,10 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
   const [uploadingComunicado, setUploadingComunicado] = useState(false);
   const [uploadProgressComunicado, setUploadProgressComunicado] = useState(0);
 
-  // Segmentación selectiva de destinatarios
   const [tipoDestinatario, setTipoDestinatario] = useState('todos'); 
   const [clientesSeleccionadosIds, setClientesSeleccionadosIds] = useState([]);
   const [filtroDestinatarios, setFiltroDestinatarios] = useState('');
 
-  // NUEVOS ESTADOS EXCLUSIVOS: Consolidación Financiera General del Caso
   const [todasLasCuotas, setTodasLasCuotas] = useState([]);
   const [loadingPagos, setLoadingPagos] = useState(false);
 
@@ -302,27 +290,49 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
     fetchComunicados();
   }, [caso.id, caso.plazos]);
 
-  // SUSCRIPCIÓN INTEGRADORA EN TIEMPO REAL: Recauda todas las cuotas del caso actual
+  // CORRECCIÓN ARQUITECTÓNICA COMPLETA: Telemetría indexada y blindada en tiempo real
   useEffect(() => {
     setLoadingPagos(true);
-    const qAllCuotas = collectionGroup(db, 'plan_pagos');
-    const unsubscribeCuotas = onSnapshot(qAllCuotas, (snapshot) => {
-      const cuotasDelCaso = snapshot.docs
-        .filter(docSnap => docSnap.ref.path.includes(caso.id))
-        .map(docSnap => {
-          const pathParts = docSnap.ref.path.split('/');
-          const clienteId = pathParts[3]; // Extrae la clave jerárquica del representado
-          return {
-            id: docSnap.id,
-            clienteId,
-            ...docSnap.data()
-          };
-        });
-      setTodasLasCuotas(cuotasDelCaso);
+    
+    // Intentamos primero la consulta directa por el candado caso_id (Eficiente y segura)
+    const qIndexedCuotas = query(collectionGroup(db, 'plan_pagos'), where('caso_id', '==', caso.id));
+    
+    const unsubscribeCuotas = onSnapshot(qIndexedCuotas, (snapshot) => {
+      const cuotasMapeadas = snapshot.docs.map(docSnap => {
+        const pathParts = docSnap.ref.path.split('/');
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          clienteId: data.cliente_id || data.clienteId || pathParts[3], // Soporta ambas variantes de ID
+          ...data
+        };
+      });
+      
+      setTodasLasCuotas(cuotasMapeadas);
       setLoadingPagos(false);
     }, (err) => {
-      console.error("Error en telemetría de recaudación unificada:", err);
-      setLoadingPagos(false);
+      console.warn("[FRONTEND WARNING] Fallo de índice en consulta directa, activando canal adaptativo de contingencia...");
+      
+      // FALLBACK AUTO-CURATIVO: Si el índice compuesto aún no se ha generado en Firebase, lee por barrido de ruta de forma segura
+      const qFallback = collectionGroup(db, 'plan_pagos');
+      onSnapshot(qFallback, (fallbackSnap) => {
+        const cuotasFiltradas = fallbackSnap.docs
+          .filter(d => d.ref.path.includes(caso.id) || d.data().caso_id === caso.id)
+          .map(d => {
+            const pathParts = d.ref.path.split('/');
+            const data = d.data();
+            return {
+              id: d.id,
+              clienteId: data.cliente_id || data.clienteId || pathParts[3],
+              ...data
+            };
+          });
+        setTodasLasCuotas(cuotasFiltradas);
+        setLoadingPagos(false);
+      }, (fallbackErr) => {
+        console.error("Error crítico en canal financiero unificado:", fallbackErr);
+        setLoadingPagos(false);
+      });
     });
 
     return () => unsubscribeCuotas();
@@ -347,7 +357,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         telefono_secundario: '',
         pais: pais,
         direccion: direccion.trim(),
-        notas: notes.trim(),
+        notes: notes.trim(),
         estado_pago: 'Pendiente',
         stripe_customer_id: '',
         fecha_registro: serverTimestamp()
@@ -578,6 +588,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
 
           setLocalPlazos(plazosModificados);
           setFileProbatorio(null);
+          setTypographyProbatorio('');
           setDescripcionProbatorio('');
           setFechaDocumentoProbatorio('');
           setPlazoAActivar(null);
@@ -766,7 +777,6 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
 
   const clientesPaginados = clientesFiltrados.slice(page * rowsPerPage, (page * rowsPerPage) + rowsPerPage);
 
-  // LOGICA FRONTEND INTERNA: Agrupación dinámica por Periodo Fiscal para el Dashboard
   const desgloseFinancieroMensual = {};
   let totalRecaudadoNetoGlobal = 0;
   let totalIvaAcumuladoGlobal = 0;
@@ -774,7 +784,9 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
   let totalPendienteCobroGlobal = 0;
 
   todasLasCuotas.forEach(cuota => {
-    if (cuota.estado === 'pagada') {
+    const estadoLimpio = String(cuota.estado || '').toLowerCase().trim();
+    
+    if (estadoLimpio === 'pagada' || estadoLimpio === 'pagado') {
       totalRecaudadoNetoGlobal += cuota.monto_neto || 0;
       totalIvaAcumuladoGlobal += cuota.iva || 0;
       totalGeneralRecaudadoGlobal += cuota.monto_total || 0;
@@ -791,6 +803,9 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         } catch (e) {
           periodo = 'Histórico';
         }
+      }
+      if (!periodo && cuota.fecha_vencimiento) {
+        periodo = cuota.fecha_vencimiento.substring(0, 7);
       }
       if (!periodo) periodo = 'Histórico';
 
@@ -817,8 +832,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
       } else if (cuota.metodo_pago === 'efectivo') {
         desgloseFinancieroMensual[periodo].efectivo += cuota.monto_total || 0;
       }
-    } else if (cuota.estado === 'pendiente') {
-      // Tomamos en consideration los saldos pendientes granulares de pagos parciales
+    } else if (estadoLimpio === 'pendiente') {
       totalPendienteCobroGlobal += cuota.saldo_pendiente !== undefined ? cuota.saldo_pendiente : cuota.monto_total;
     }
   });
@@ -833,7 +847,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         clienteId={clienteSeleccionadoId} 
         onVolver={() => setClienteSeleccionadoId(null)} 
         currentUserEmail={currentUserEmail}
-        userRole={userRole} // INYECCIÓN ESTRUCTURAL DE SEGURIDAD RBAC COMPLETA
+        userRole={userRole}
       />
     );
   }
@@ -882,7 +896,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         </Tabs>
       </Box>
 
-      {/* PESTAÑA 1: RECONSTRUCCIÓN VERTICAL TABLA DE REPRESETADOS */}
+      {/* PESTAÑA 1: REPRESENTADOS */}
       <TabPanel value={activeTab} index={0}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
           <Typography variant="h6" fontWeight="bold">Representados en el Litigio</Typography>
@@ -1064,7 +1078,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                       secondary={
                         <Box component="span" sx={{ display: 'block', mt: 0.5 }}>
                           <Typography variant="body2" component="span" color="text.primary" sx={{ display: 'block', fontWeight: 'medium' }}>
-                            {d.descripcion || 'Sin descripción configurada.'}
+                            {d.description || 'Sin descripción configurada.'}
                           </Typography>
                           <Typography variant="caption" component="span" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
                             {`Fecha Doc: ${d.fecha_documento || 'No específica'} | Subido: ${d.fecha_subida ? new Date(d.fecha_subida).toLocaleString() : ''}`}
@@ -1088,14 +1102,13 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         </Paper>
       </TabPanel>
 
-      {/* PESTAÑA 3: EXPEDIENTE FINANCIERO Y CONTROL DE IVA MENSUAL */}
+      {/* PESTAÑA 3: EXPEDIENTE FINANCIERO */}
       <TabPanel value={activeTab} index={2}>
         {loadingPagos ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
         ) : (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             
-            {/* 1. SECCIÓN SUPERIOR DE INDICADORES MACRO (KPI CARDS) */}
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
               <Paper sx={{ p: 2.5, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
                 <Typography variant="caption" fontWeight="bold" color="text.secondary" display="block">
@@ -1131,7 +1144,6 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
               </Paper>
             </Box>
 
-            {/* 2. TABLA CONSOLIDADA MES A MES PARA DECLARACIÓN FISCAL */}
             <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
               <Typography variant="subtitle1" fontWeight="bold" color="primary.main" gutterBottom>
                 Control Impositivo de IVA por Periodo Fiscal (Mensual)
@@ -1178,7 +1190,6 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
               )}
             </Paper>
 
-            {/* 3. HISTORIAL COMPLETO Y DETALLADO DE TRANSACCIONES */}
             <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
               <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 2 }}>
                 Bitácora Global de Movimientos y Conciliaciones
@@ -1213,24 +1224,24 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                             <TableCell>{cuota.fecha_vencimiento}</TableCell>
                             <TableCell>
                               <Chip 
-                                label={cuota.estado.toUpperCase()} 
+                                label={String(cuota.estado || '').toUpperCase()} 
                                 size="small" 
-                                color={cuota.estado === 'pagada' ? 'success' : 'warning'}
+                                color={String(cuota.estado || '').toLowerCase().trim() === 'pagada' || String(cuota.estado || '').toLowerCase().trim() === 'pagado' ? 'success' : 'warning'}
                                 sx={{ fontWeight: 'bold', fontSize: '0.65rem', height: 18 }}
                               />
                             </TableCell>
                             <TableCell sx={{ fontWeight: 'bold' }}>
                               {cuota.moneda === 'crc' ? '¢' : '$'}
-                              {cuota.monto_total.toFixed(2)}
+                              {(cuota.monto_total || 0).toFixed(2)}
                               {cuota.saldo_pendiente > 0 && (
                                 <Typography variant="caption" display="block" color="error.main" sx={{ fontSize: '0.65rem', fontWeight: 'bold' }}>
-                                  (Pendiente: {cuota.moneda === 'crc' ? '¢' : '$'}{cuota.saldo_pendiente.toFixed(2)})
+                                  (Pendiente: {cuota.moneda === 'crc' ? '¢' : '$'}{(cuota.saldo_pendiente || 0).toFixed(2)})
                                 </Typography>
                               )}
                             </TableCell>
                             <TableCell>
                               <Typography variant="caption" display="block" sx={{ lineHeight: 1 }}>
-                                {cuota.estado === 'pagada' 
+                                {String(cuota.estado || '').toLowerCase().trim() === 'pagada' || String(cuota.estado || '').toLowerCase().trim() === 'pagado'
                                   ? (cuota.metodo_pago === 'stripe' ? '💳 Stripe Invoice' : `📁 Manual (${cuota.metodo_pago})`)
                                   : `⏰ Programado (${cuota.metodo_pago || 'Stripe'})`}
                               </Typography>
@@ -1239,7 +1250,6 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                                   Ref: {cuota.comprobante_referencia}
                                 </Typography>
                               )}
-                              {/* RASTRO DE AUDITORÍA MULTIMONEDA HACIENDA v4.4 */}
                               {cuota.monto_colones_original > 0 && (
                                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.62rem', fontStyle: 'italic', color: 'orange' }}>
                                   Original: ¢{cuota.monto_colones_original.toLocaleString()} (T/C: {cuota.tipo_cambio_banco})
@@ -1259,7 +1269,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         )}
       </TabPanel>
 
-      {/* PESTAÑA 4: CONTROL DE VENCIMIENTOS PROCESALES */}
+      {/* PESTAÑA 4: CONTROL DE VENCIMIENTOS */}
       <TabPanel value={activeTab} index={3}>
         <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -1365,7 +1375,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         </Paper>
       </TabPanel>
 
-      {/* PESTAÑA 5: COMUNICADOS ENVIADOS (BITÁCORA DE MAILING MASIVO) */}
+      {/* PESTAÑA 5: COMUNICADOS ENVIADOS */}
       <TabPanel value={activeTab} index={4}>
         <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -1402,7 +1412,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         </Paper>
       </TabPanel>
 
-      {/* MODAL DE AGREGAR CLIENTE EXTENDIDO */}
+      {/* MODAL DE AGREGAR CLIENTE */}
       <Dialog 
         open={openModal} 
         onClose={() => setOpenModal(false)} 
@@ -1502,7 +1512,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         </DialogActions>
       </Dialog>
 
-      {/* MODAL INTERMEDIO: INGRESO DE METADATOS PARA EL DOCUMENTO COMÚN */}
+      {/* MODAL: METADATOS DOC COMÚN */}
       <Dialog 
         open={openUploadModal} 
         onClose={() => { if (!uploadingDoc) { setOpenUploadModal(false); setFileComunSeleccionado(null); } }} 
@@ -1532,7 +1542,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         </DialogActions>
       </Dialog>
 
-      {/* MODAL: RESOLVER PLAZO CON ARCHIVO PROBATORIO Y METADATOS OBLIGATORIOS */}
+      {/* MODAL: RESOLVER PLAZO */}
       <Dialog 
         open={openCerrarModal} 
         onClose={() => { if (!uploadingPlazoDoc) { setOpenCerrarModal(false); setFileProbatorio(null); } }} 
@@ -1586,7 +1596,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         </DialogActions>
       </Dialog>
 
-      {/* MODAL: REDACTAR COMUNICADO MASIVO O SELECTIVO CON FILTRO DE DESTINATARIOS */}
+      {/* MODAL: REDACTAR COMUNICADO */}
       <Dialog 
         open={openComunicadoModal} 
         onClose={() => { if (!uploadingComunicado) { setOpenComunicadoModal(false); setFileComunicado(null); } }} 
@@ -1611,7 +1621,6 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
           <TextField label="Asunto del Correo / Comunicado" autoFocus fullWidth required disabled={uploadingComunicado} value={asuntoComunicado} onChange={e => setAsuntoComunicado(e.target.value)} />
           <TextField label="Cuerpo del Mensaje (Texto del Email)" fullWidth multiline rows={4} required disabled={uploadingComunicado} value={cuerpoComunicado} onChange={e => setCuerpoComunicado(e.target.value)} />
           
-          {/* CONTROL DE SEGMENTACIÓN DE DESTINATARIOS */}
           <Box sx={{ bgcolor: '#f8fafc', p: 2, borderRadius: 2, border: '1px solid #e2e8f0' }}>
             <FormLabel component="legend" style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#1a365d', marginBottom: '8px' }}>
               Destinatarios del Mensaje
@@ -1626,7 +1635,6 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
               <FormControlLabel value="especificos" control={<Radio size="small" />} label="Seleccionar específicos" />
             </RadioGroup>
 
-            {/* PANEL DESPLEGABLE: SELECCIÓN MANUAL DE CLIENTES CON BUSCADOR DINÁMICO */}
             {tipoDestinatario === 'especificos' && (
               <Box sx={{ mt: 1.5, pt: 1.5, borderTop: '1px dashed #cbd5e1' }}>
                 <TextField
@@ -1636,11 +1644,6 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                   value={filtroDestinatarios}
                   onChange={(e) => setFiltroDestinatarios(e.target.value)}
                   disabled={uploadingComunicado}
-                  InputProps={{
-                    startAdornment: (
-                      <Box sx={{ color: 'text.secondary', display: 'flex', mr: 1 }}><Search size={16} /></Box>
-                    ),
-                  }}
                   sx={{ mb: 1, bgcolor: '#ffffff' }}
                 />
                 
