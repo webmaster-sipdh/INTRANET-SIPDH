@@ -346,14 +346,15 @@ exports.nightlyBillingCron = onSchedule({
         // Paso C: Finalizar y emitir la factura que ya tiene el dinero cargado con total garantía
         const finalizedInvoice = await stripe.invoices.sendInvoice(invoice.id);
 
+        // REPARACIÓN COMPLETA DE NOMENCLATURA EN ABSOLUTO LOWERCASE SNAKE_CASE:
         await cuotaRef.update({
           stripe_invoice_id: finalizedInvoice.id,
           stripe_invoice_url: finalizedInvoice.hosted_invoice_url,
           metodo_pago: 'stripe',
           fecha_cobro_disparado: new Date().toISOString(),
           tipo_cambio_banco: tipoCambioVentaBCCR,
-          caso_Id: casoId,
-          cliente_Id: clienteId
+          caso_id: casoId,     // <--- CORREGIDO SIN MAYÚSCULAS
+          cliente_id: clienteId // <--- CORREGIDO SIN MAYÚSCULAS
         });
 
         console.log(`[CRON SUCCESS] Cobro electrónico enviado. Sincronizado perfectamente con vencimiento al: ${cuotaData.fecha_vencimiento} | Invoice ID: ${finalizedInvoice.id}`);
