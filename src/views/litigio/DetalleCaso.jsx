@@ -290,70 +290,37 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
     fetchComunicados();
   }, [caso.id, caso.plazos]);
 
-  // CORRECCIÓN ARQUITECTÓNICA DE LECTURA: Escucha en tiempo real con Fallback seguro por subcolección
+  // =====================================================================================
+  // CORRECCIÓN NATIVA: Carga de cuotas directa desde subcolección, 100% libre de índices JSON
+  // =====================================================================================
   useEffect(() => {
-    setLoadingPagos(true);
-    
-    // 1. Intentamos primero la escucha masiva por Collection Group filtando tu campo 'caso_id'
-    const qIndexedCuotas = query(collectionGroup(db, 'plan_pagos'), where('caso_id', '==', caso.id));
-    
-    const unsubscribeCuotas = onSnapshot(qIndexedCuotas, (snapshot) => {
-      const cuotasMapeadas = snapshot.docs.map(docSnap => {
-        const pathParts = docSnap.ref.path.split('/');
-        const data = docSnap.data();
-        return {
-          id: docSnap.id,
-          clienteId: data.cliente_id || data.clienteId || pathParts[3], 
-          ...data
-        };
-      });
-      
-      setTodasLasCuotas(cuotasMapeadas);
-      setLoadingPagos(false);
-    }, async (err) => {
-      console.warn("[FRONTEND WARNING] Fallo de índice en consulta directa o restricciones de Reglas de Seguridad. Activando barrido resiliente por subcolección directa...");
-      
-      // 2. ESCUDO DE CONTINGENCIA: Si el índice en Collection Group no está creado o las reglas deniegan el acceso,
-      // barremos las subcolecciones 'plan_pagos' de cada cliente de forma atómica para que la UI funcione de inmediato.
+    if (!caso.id || clientes.length === 0) return;
+
+    const cargarCuotasDirectamente = async () => {
+      setLoadingPagos(true);
       try {
-        let listaClientes = clientes;
-        
-        if (!listaClientes || listaClientes.length === 0) {
-          const clientesRef = collection(db, 'casos', caso.id, 'clientes');
-          const clientesSnap = await getDocs(clientesRef);
-          listaClientes = clientesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        }
-
-        if (listaClientes.length === 0) {
-          setTodasLasCuotas([]);
-          setLoadingPagos(false);
-          return;
-        }
-
-        const promesas = listaClientes.map(async (cli) => {
-          const pagosRef = collection(db, 'casos', caso.id, 'clientes', cli.id, 'plan_pagos');
+        // Mapeamos los clientes cargados y leemos su subcolección 'plan_pagos' de forma limpia y directa
+        const promesas = clientes.map(async (cliente) => {
+          const pagosRef = collection(db, 'casos', caso.id, 'clientes', cliente.id, 'plan_pagos');
           const pagosSnap = await getDocs(pagosRef);
-          return pagosSnap.docs.map(docSnap => {
-            const data = docSnap.data();
-            return {
-              id: docSnap.id,
-              clienteId: data.cliente_id || data.clienteId || cli.id,
-              ...data
-            };
-          });
+          return pagosSnap.docs.map(docSnap => ({
+            id: docSnap.id,
+            clienteId: cliente.id,
+            ...docSnap.data()
+          }));
         });
-        
+
         const resultados = await Promise.all(promesas);
         setTodasLasCuotas(resultados.flat());
-      } catch (fallbackErr) {
-        console.error("Error crítico en canal financiero unificado alternativo:", fallbackErr);
+      } catch (err) {
+        console.error("Error cargando los planes de pago de forma nativa:", err);
       } finally {
         setLoadingPagos(false);
       }
-    });
+    };
 
-    return () => unsubscribeCuotas();
-  }, [caso.id, clientes.length]);
+    cargarCuotasDirectamente();
+  }, [caso.id, clientes]);
 
   const handleCreateCliente = async (e) => {
     e.preventDefault();
@@ -1260,7 +1227,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                               <Typography variant="caption" display="block" sx={{ lineHeight: 1 }}>
                                 {String(cuota.estado || '').toLowerCase().trim() === 'pagada' || String(cuota.estado || '').toLowerCase().trim() === 'pagado'
                                   ? (cuota.metodo_pago === 'stripe' ? '💳 Stripe Invoice' : `📁 Manual (${cuota.metodo_pago})`)
-                                  : `⏰ Programado (${cuota.metago_pago || 'Stripe'})`}
+                                  : `⏰ Programado (${cuota.metodo_pago || 'Stripe'})`}
                               </Typography>
                               {cuota.comprobante_referencia && (
                                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.62rem', fontStyle: 'italic' }}>
