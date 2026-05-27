@@ -290,11 +290,11 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
     fetchComunicados();
   }, [caso.id, caso.plazos]);
 
-  // CORRECCIÓN ARQUITECTÓNICA COMPLETA: Telemetría indexada y blindada en tiempo real
+  // CORRECCIÓN ARQUITECTÓNICA DE LECTURA: Escucha en tiempo real con Fallback seguro por subcolección
   useEffect(() => {
     setLoadingPagos(true);
     
-    // Intentamos primero la consulta directa por el candado caso_id (Eficiente y segura)
+    // 1. Intentamos primero la escucha masiva por Collection Group filtando tu campo 'caso_id'
     const qIndexedCuotas = query(collectionGroup(db, 'plan_pagos'), where('caso_id', '==', caso.id));
     
     const unsubscribeCuotas = onSnapshot(qIndexedCuotas, (snapshot) => {
@@ -303,40 +303,57 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
         const data = docSnap.data();
         return {
           id: docSnap.id,
-          clienteId: data.cliente_id || data.clienteId || pathParts[3], // Soporta ambas variantes de ID
+          clienteId: data.cliente_id || data.clienteId || pathParts[3], 
           ...data
         };
       });
       
       setTodasLasCuotas(cuotasMapeadas);
       setLoadingPagos(false);
-    }, (err) => {
-      console.warn("[FRONTEND WARNING] Fallo de índice en consulta directa, activando canal adaptativo de contingencia...");
+    }, async (err) => {
+      console.warn("[FRONTEND WARNING] Fallo de índice en consulta directa o restricciones de Reglas de Seguridad. Activando barrido resiliente por subcolección directa...");
       
-      // FALLBACK AUTO-CURATIVO: Si el índice compuesto aún no se ha generado en Firebase, lee por barrido de ruta de forma segura
-      const qFallback = collectionGroup(db, 'plan_pagos');
-      onSnapshot(qFallback, (fallbackSnap) => {
-        const cuotasFiltradas = fallbackSnap.docs
-          .filter(d => d.ref.path.includes(caso.id) || d.data().caso_id === caso.id)
-          .map(d => {
-            const pathParts = d.ref.path.split('/');
-            const data = d.data();
+      // 2. ESCUDO DE CONTINGENCIA: Si el índice en Collection Group no está creado o las reglas deniegan el acceso,
+      // barremos las subcolecciones 'plan_pagos' de cada cliente de forma atómica para que la UI funcione de inmediato.
+      try {
+        let listaClientes = clientes;
+        
+        if (!listaClientes || listaClientes.length === 0) {
+          const clientesRef = collection(db, 'casos', caso.id, 'clientes');
+          const clientesSnap = await getDocs(clientesRef);
+          listaClientes = clientesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        }
+
+        if (listaClientes.length === 0) {
+          setTodasLasCuotas([]);
+          setLoadingPagos(false);
+          return;
+        }
+
+        const promesas = listaClientes.map(async (cli) => {
+          const pagosRef = collection(db, 'casos', caso.id, 'clientes', cli.id, 'plan_pagos');
+          const pagosSnap = await getDocs(pagosRef);
+          return pagosSnap.docs.map(docSnap => {
+            const data = docSnap.data();
             return {
-              id: d.id,
-              clienteId: data.cliente_id || data.clienteId || pathParts[3],
+              id: docSnap.id,
+              clienteId: data.cliente_id || data.clienteId || cli.id,
               ...data
             };
           });
-        setTodasLasCuotas(cuotasFiltradas);
+        });
+        
+        const resultados = await Promise.all(promesas);
+        setTodasLasCuotas(resultados.flat());
+      } catch (fallbackErr) {
+        console.error("Error crítico en canal financiero unificado alternativo:", fallbackErr);
+      } finally {
         setLoadingPagos(false);
-      }, (fallbackErr) => {
-        console.error("Error crítico en canal financiero unificado:", fallbackErr);
-        setLoadingPagos(false);
-      });
+      }
     });
 
     return () => unsubscribeCuotas();
-  }, [caso.id]);
+  }, [caso.id, clientes.length]);
 
   const handleCreateCliente = async (e) => {
     e.preventDefault();
@@ -1243,7 +1260,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
                               <Typography variant="caption" display="block" sx={{ lineHeight: 1 }}>
                                 {String(cuota.estado || '').toLowerCase().trim() === 'pagada' || String(cuota.estado || '').toLowerCase().trim() === 'pagado'
                                   ? (cuota.metodo_pago === 'stripe' ? '💳 Stripe Invoice' : `📁 Manual (${cuota.metodo_pago})`)
-                                  : `⏰ Programado (${cuota.metodo_pago || 'Stripe'})`}
+                                  : `⏰ Programado (${cuota.metago_pago || 'Stripe'})`}
                               </Typography>
                               {cuota.comprobante_referencia && (
                                 <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: '0.62rem', fontStyle: 'italic' }}>

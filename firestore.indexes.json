@@ -1,0 +1,15 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "plan_pagos",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {
+          "fieldPath": "caso_id",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
