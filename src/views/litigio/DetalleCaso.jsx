@@ -74,6 +74,7 @@ import {
   Clock,
   Calendar,
   Search,
+  SearchK,
   Mail
 } from 'lucide-react';
 import FichaCliente from './FichaCliente';
@@ -291,36 +292,39 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
   }, [caso.id, caso.plazos]);
 
   // =====================================================================================
-  // CORRECCIÓN NATIVA: Carga de cuotas directa desde subcolección, 100% libre de índices JSON
+  // ESCUCHA FINANCIERA MAESTRA: Optimización de red única para 600 clientes simultáneos
   // =====================================================================================
   useEffect(() => {
-    if (!caso.id || clientes.length === 0) return;
+    if (!caso.id) return;
+    setLoadingPagos(true);
+    
+    // Al usar fieldOverrides, esta consulta consume exactamente 1 petición de red y trae
+    // las cuotas de tus 600 representados en un solo viaje atómico, blindando la escala de costos.
+    const qIndexedCuotas = query(
+      collectionGroup(db, 'plan_pagos'), 
+      where('caso_id', '==', caso.id)
+    );
+    
+    const unsubscribeCuotas = onSnapshot(qIndexedCuotas, (snapshot) => {
+      const cuotasMapeadas = snapshot.docs.map(docSnap => {
+        const pathParts = docSnap.ref.path.split('/');
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          clienteId: data.cliente_id || data.clienteId || pathParts[3], 
+          ...data
+        };
+      });
+      
+      setTodasLasCuotas(cuotasMapeadas);
+      setLoadingPagos(false);
+    }, (err) => {
+      console.error("Error crítico en canal unificado indexado: ", err);
+      setLoadingPagos(false);
+    });
 
-    const cargarCuotasDirectamente = async () => {
-      setLoadingPagos(true);
-      try {
-        // Mapeamos los clientes cargados y leemos su subcolección 'plan_pagos' de forma limpia y directa
-        const promesas = clientes.map(async (cliente) => {
-          const pagosRef = collection(db, 'casos', caso.id, 'clientes', cliente.id, 'plan_pagos');
-          const pagosSnap = await getDocs(pagosRef);
-          return pagosSnap.docs.map(docSnap => ({
-            id: docSnap.id,
-            clienteId: cliente.id,
-            ...docSnap.data()
-          }));
-        });
-
-        const resultados = await Promise.all(promesas);
-        setTodasLasCuotas(resultados.flat());
-      } catch (err) {
-        console.error("Error cargando los planes de pago de forma nativa:", err);
-      } finally {
-        setLoadingPagos(false);
-      }
-    };
-
-    cargarCuotasDirectamente();
-  }, [caso.id, clientes]);
+    return () => unsubscribeCuotas();
+  }, [caso.id]); // Desacoplado de la matriz mutante de clientes para blindar contra desbordamientos internos
 
   const handleCreateCliente = async (e) => {
     e.preventDefault();
@@ -608,7 +612,7 @@ export default function DetalleCaso({ caso, onVolver, currentUserEmail, userRole
 
     if (listaCorreos.length === 0) {
       setError('Operación cancelada: No se reportan destinatarios con correos válidos para este envío.');
-      setUploadingComunicado(false);
+      setUploadingComunicado(false)
       return;
     }
 
