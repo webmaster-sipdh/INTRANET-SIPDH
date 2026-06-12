@@ -64,7 +64,7 @@ export default function Layout({ children, currentView, setView, userRole }) {
               src="/SPIDH-white-52.png" 
               alt="SIPDH - Intranet" 
               style={{ 
-                height: '26px', 
+                height: '52px', 
                 width: 'auto', 
                 objectFit: 'contain',
                 display: 'block'
