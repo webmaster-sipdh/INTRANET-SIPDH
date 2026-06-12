@@ -6,7 +6,7 @@ import {
   IconButton, Avatar, Divider 
 } from '@mui/material';
 import { Briefcase, ShieldAlert, LogOut, UserCheck, Home, Layers } from 'lucide-react';
-import logoSipdh from '../assets/SPIDH-white-52.png';
+import logoSipdh from '/SPIDH-white-52.png';
 
 const drawerWidth = 260;
 
