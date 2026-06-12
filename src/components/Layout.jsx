@@ -6,7 +6,6 @@ import {
   IconButton, Avatar, Divider 
 } from '@mui/material';
 import { Briefcase, ShieldAlert, LogOut, UserCheck, Home, Layers } from 'lucide-react';
-import logoSipdh from '/SPIDH-white-52.png';
 
 const drawerWidth = 260;
 
@@ -62,7 +61,7 @@ export default function Layout({ children, currentView, setView, userRole }) {
             
             {/* 🚀 LOGO TEXTUAL: Reducción de proporciones en Toolbar */}
             <img 
-              src={logoSipdh} 
+              src="/SPIDH-white-52.png" 
               alt="SIPDH - Intranet" 
               style={{ 
                 height: '52px', 

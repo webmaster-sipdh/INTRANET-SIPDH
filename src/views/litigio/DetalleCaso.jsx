@@ -74,7 +74,6 @@ import {
   Clock,
   Calendar,
   Search,
-  SearchK,
   Mail
 } from 'lucide-react';
 import FichaCliente from './FichaCliente';
