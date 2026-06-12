@@ -61,8 +61,8 @@ export default function Layout({ children, currentView, setView, userRole }) {
             
             {/* 🚀 LOGO TEXTUAL: Reducción de proporciones en Toolbar */}
             <img 
-              src="/SPIDH-white-26.png" 
-              alt="ISIPDH - Intranet" 
+              src="/SPIDH-white-52.png" 
+              alt="SIPDH - Intranet" 
               style={{ 
                 height: '26px', 
                 width: 'auto', 
