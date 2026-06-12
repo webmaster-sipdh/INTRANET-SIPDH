@@ -430,10 +430,21 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
         estado_pago: 'Pagado'
       });
 
+      // 🔍 MEJORA DE AUDITORÍA LEGIBLE: Buscamos nombres de negocio antes de registrar el Log
+      const casoSnap = await db.collection('casos').doc(casoId).get();
+      const casoNombre = casoSnap.exists ? (casoSnap.data().nombre || 'Sin nombre') : 'Desconocido';
+
+      const clienteSnap = await db.collection('casos').doc(casoId).collection('clientes').doc(clienteId).get();
+      let clienteNombre = 'Desconocido';
+      if (clienteSnap.exists) {
+        const cData = clienteSnap.data();
+        clienteNombre = `${cData.nombres || ''} ${cData.apellidos || ''}`.trim();
+      }
+
       await db.collection('logs_auditoria').add({
         usuario: 'STRIPE_WEBHOOK_AUTOMATICO',
         accion: 'Conciliación Automática de Pago',
-        detalles: `El sistema validó el pago digital de la factura "${cuotaData.concepto}" por la suma total de cobro correspondiente al caso ID: ${casoId}`,
+        detalles: `El sistema validó el pago digital de la factura "${cuotaData.concepto}" por la suma total correspondiente al representado: "${clienteNombre}" (ID: ${clienteId}) dentro del litigio: "${casoNombre}" (ID: ${casoId})`,
         fecha: admin.firestore.FieldValue.serverTimestamp()
       });
 
@@ -486,3 +497,4 @@ exports.syncStripeInvoiceStatus = onDocumentUpdated(
     return null;
   }
 );
+}
